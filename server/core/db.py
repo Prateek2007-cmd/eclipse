@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS audit_log(
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, action TEXT,
   payload_hash TEXT, prev_hash TEXT, hash TEXT, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS rag_chunks(
-  id TEXT PRIMARY KEY, doc_id TEXT, chunk TEXT, vec BLOB,
+  id TEXT PRIMARY KEY, text TEXT, kind TEXT, meta TEXT,
   created_at INTEGER);
 CREATE TABLE IF NOT EXISTS watches(
   id TEXT PRIMARY KEY, url TEXT, selector TEXT, last_value TEXT,
@@ -163,6 +163,18 @@ def migrate(db_path: Path | None = None) -> None:
             grant_cols = {r[1] for r in conn.execute("PRAGMA table_info(grants)")}
             if "detail" not in grant_cols:
                 conn.execute("ALTER TABLE grants ADD COLUMN detail TEXT")
+            # Sprint 6: the rag_chunks table was reshaped (id, text,
+            # kind, meta) — the Sprint 1 shape (doc_id, chunk, vec)
+            # never held data (RAG was not built), so recreate it
+            # when the old columns are present.
+            rag_cols = {r[1] for r in conn.execute("PRAGMA table_info(rag_chunks)").fetchall()}
+            if rag_cols and "chunk" in rag_cols:
+                conn.execute("DROP TABLE rag_chunks")
+                conn.execute(
+                    "CREATE TABLE rag_chunks("
+                    " id TEXT PRIMARY KEY, text TEXT, kind TEXT, meta TEXT,"
+                    " created_at INTEGER)"
+                )
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

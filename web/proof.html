@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eclipse — Proof</title>
+<style>
+  :root {
+    --bg: #070B12;        /* 60% */
+    --surface: #12212B;   /* 30% */
+    --accent: #FF6B35;    /* 10% */
+    --text: #E8EEF4;
+    --muted: #8FA3B0;
+    --border: #22384A;
+    --good: #3FB27F;
+    --bad: #E5484D;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 28px 32px 8px; }
+  header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .02em; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 0; color: var(--muted); max-width: 720px; }
+  main { padding: 20px 32px 48px; display: grid; gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  section { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; }
+  section.full { grid-column: 1 / -1; }
+  h2 { margin: 0 0 4px; font-size: 17px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  .caveat { color: var(--text); font-size: 14px; margin: 0 0 14px;
+    border-left: 3px solid var(--accent); padding-left: 10px; }
+  .row { display: flex; justify-content: space-between; gap: 12px;
+    padding: 7px 0; border-top: 1px solid var(--border); }
+  .row:first-of-type { border-top: 0; }
+  .row b { font-variant-numeric: tabular-nums; }
+  .pass { color: var(--good); font-weight: 700; }
+  .fail { color: var(--bad); font-weight: 700; }
+  .bar { height: 8px; border-radius: 4px; background: var(--border);
+    overflow: hidden; margin: 4px 0 12px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .bar i.good { background: var(--good); }
+  .bar i.worst { background: var(--bad); }
+  .fixture-bar { display: grid; grid-template-columns: 140px 1fr 64px;
+    gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
+  .fixture-bar .fbar { height: 8px; border-radius: 4px;
+    background: var(--border); overflow: hidden; }
+  .fixture-bar .fbar i { display: block; height: 100%;
+    background: var(--accent); }
+  .fixture-bar.worst .fbar i { background: var(--bad); }
+  .fixture-bar.worst .fname { color: var(--bad); font-weight: 700; }
+  .fixture-bar .ftime { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; overflow: auto; font-size: 12.5px;
+    max-height: 260px; white-space: pre-wrap; word-break: break-word; }
+  input[type=text], input[type=password], input[type=search] {
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px;
+    font: inherit; width: 100%; }
+  button { background: var(--accent); color: #14080A; border: 0;
+    border-radius: 8px; padding: 8px 16px; font: inherit; font-weight: 700;
+    cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text);
+    border: 1px solid var(--border); font-weight: 400; }
+  .tokenrow { display: flex; gap: 10px; padding: 16px 32px 0;
+    align-items: end; flex-wrap: wrap; }
+  .tokenrow .field { display: flex; flex-direction: column; gap: 4px;
+    flex: 1; max-width: 420px; min-width: 220px; }
+  label { color: var(--muted); font-size: 13px; }
+  .note { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); }
+  .error { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ECLIPSE <span>— proof</span></h1>
+  <p>Every number here comes from a real benchmark run or a real outbound
+  call. Nothing is typed in by hand. When a run has not happened yet,
+  the panel says so instead of showing a number.</p>
+</header>
+<div class="tokenrow">
+  <div class="field">
+    <label for="token">Server token — from data/.eclipse-token</label>
+    <input type="password" id="token" autocomplete="off">
+  </div>
+  <button id="show-token" class="ghost" type="button">Show</button>
+  <button id="load">Load proof</button>
+</div>
+<main>
+  <section id="metrics">
+    <h2>SIH metrics</h2>
+    <p class="sub">From the latest benchmark run. Targets in brackets.</p>
+    <div id="metrics-body"><p class="empty">Enter the token and load.</p></div>
+  </section>
+  <section id="egress">
+    <h2>Egress audit</h2>
+    <p class="sub">Live grep of every outbound planner payload for secrets.</p>
+    <div id="egress-body"><p class="empty">—</p></div>
+  </section>
+  <section id="redaction" class="full">
+    <h2>Redaction proof</h2>
+    <p class="sub">Second PII scan on every redacted payload: 0 recoverable tokens.</p>
+    <div id="redaction-body"><p class="empty">—</p></div>
+  </section>
+  <section id="latency">
+    <h2>Latency waterfall</h2>
+    <p class="sub">Per-fixture step timings from the latest benchmark run. Worst fixture in red.</p>
+    <div id="latency-body"><p class="empty">—</p></div>
+  </section>
+  <section id="sent" class="full">
+    <h2>What was sent</h2>
+    <p class="sub">Every outbound planner payload, redacted. Copy copies redacted only —
+    the stored text is the redacted text.</p>
+    <label for="q">Filter by endpoint or model</label>
+    <input type="search" id="q" placeholder="Filter by endpoint or model…">
+    <div id="sent-body" style="margin-top:12px"><p class="empty">—</p></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let token = "";
+function headers() { return { "X-Eclipse-Token": token }; }
+// Escape text before it goes into innerHTML. Every value rendered
+// on this page is untrusted in principle (fixture text, endpoint and
+// model names) — nothing reaches innerHTML unescaped.
+function esc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+async function get(path) {
+  const r = await fetch(path, { headers: headers() });
+  if (!r.ok) throw new Error(path + " → " + r.status);
+  return r.json();
+}
+function pct(x) {
+  return (typeof x === "number" && isFinite(x)) ? (x * 100).toFixed(1) + "%" : "—";
+}
+function row(label, value, cls) {
+  return `<div class="row"><span>${esc(label)}</span><b class="${cls||""}">${esc(value)}</b></div>`;
+}
+function clearAll() {
+  for (const id of ["metrics-body", "egress-body", "redaction-body", "latency-body", "sent-body"]) {
+    $(id).innerHTML = `<p class="empty">Loading…</p>`;
+  }
+}
+async function loadAll() {
+  token = $("token").value.trim();
+  if (!token) { alert("Paste the server token first."); return; }
+  clearAll();
+  try {
+    const m = await get("/proof/metrics");
+    if (!m.metrics) {
+      $("metrics-body").innerHTML = `<p class="empty">${esc(m.reason)}</p>`;
+    } else {
+      const x = m.metrics, t = m.targets;
+      $("metrics-body").innerHTML =
+        `<p class="caveat">${esc(m.honesty || "")}</p>` +
+        row("Visual grounding, first try (mock planner)", pct(x.visual_grounding_first_try) + ` (target ${pct(t.visual_grounding_first_try)})`, x.visual_grounding_first_try >= t.visual_grounding_first_try ? "pass" : "fail") +
+        row("PII recall", pct(x.pii_recall) + ` (target ${pct(t.pii_recall)})`, x.pii_recall >= t.pii_recall ? "pass" : "fail") +
+        row("PII precision", pct(x.pii_precision) + ` (target ${pct(t.pii_precision)})`, x.pii_precision >= t.pii_precision ? "pass" : "fail") +
+        row("Redaction — recoverable tokens", x.redaction_recoverable_tokens + " (target 0)", x.redaction_recoverable_tokens === 0 ? "pass" : "fail") +
+        row("Extension models", x.resource_mb + " MB (budget " + t.resource_mb + " MB)", x.resource_mb <= t.resource_mb ? "pass" : "fail") +
+        row("Latency p50 / step (mock planner)", x.latency_p50_s + "s (target ≤" + t.latency_p50_s + "s)", x.latency_p50_s <= t.latency_p50_s ? "pass" : "fail") +
+        `<p class="note">Run: ${esc(m.generated_at)} · ${esc(m.fixtures)} fixtures · worst page: ${esc(m.worst_page || "—")} (${esc(m.worst_page_s ?? "—")}s) · worst PII fixture: ${esc(m.worst_pii_fixture || "—")} (recall ${esc(m.worst_pii_recall ?? "—")})</p>`;
+    }
+    const e = await get("/proof/egress");
+    $("egress-body").innerHTML =
+      row("Secrets found", e.hit_count, e.passed ? "pass" : "fail") +
+      row("Calls checked", e.checked) +
+      row("Patterns grepped", e.patterns.join(", ")) +
+      `<p class="note">${esc(e.note)}</p>`;
+    const r = await get("/proof/redaction");
+    if (r.passed === null) {
+      $("redaction-body").innerHTML = `<p class="empty">${esc(r.reason)}</p>`;
+    } else {
+      $("redaction-body").innerHTML =
+        row("Recoverable tokens after redaction", r.recoverable_tokens, r.passed ? "pass" : "fail") +
+        row("PII recall / precision", pct(r.pii_recall) + " / " + pct(r.pii_precision)) +
+        `<p class="note">${esc(r.note)}</p>` +
+        `<pre>${esc(JSON.stringify(r.per_fixture, null, 2))}</pre>`;
+    }
+    const l = await get("/proof/latency");
+    if (!l.step_time_s) {
+      $("latency-body").innerHTML = `<p class="empty">${esc(l.reason)}</p>`;
+    } else {
+      const s = l.step_time_s;
+      const fixtures = Object.entries(l.per_fixture || {})
+        .filter(([, v]) => typeof v.elapsed_s === "number")
+        .sort((a, b) => b[1].elapsed_s - a[1].elapsed_s);
+      const maxS = Math.max(0.001, ...fixtures.map(([, v]) => v.elapsed_s));
+      const bars = fixtures.map(([name, v]) => {
+        const worst = name === l.worst_fixture;
+        return `<div class="fixture-bar${worst ? " worst" : ""}">
+          <span class="fname">${esc(name)}${worst ? " (worst)" : ""}</span>
+          <span class="fbar"><i style="width:${(v.elapsed_s / maxS * 100).toFixed(1)}%"></i></span>
+          <span class="ftime">${esc(v.elapsed_s)}s</span></div>`;
+      }).join("");
+      $("latency-body").innerHTML =
+        row("p50 / step", s.p50 + "s") +
+        row("mean / step", s.mean + "s") +
+        row("worst step", s.max + "s") +
+        `<div class="bar"><i class="${l.p50_within_target ? "good" : ""}" style="width:${Math.min(100, s.p50 / l.latency_target_s * 100)}%"></i></div>` +
+        bars +
+        `<p class="note">Target ≤${esc(l.latency_target_s)}s/step. ${esc(l.note)}</p>`;
+    }
+    await loadSent();
+  } catch (err) {
+    // A failed reload must not leave stale numbers looking current.
+    for (const id of ["metrics-body", "egress-body", "redaction-body", "latency-body", "sent-body"]) {
+      $(id).innerHTML = `<p class="error">Load failed — numbers below may be stale. ${esc(err.message)}</p>`;
+    }
+  }
+}
+async function loadSent() {
+  const q = $("q").value.trim();
+  try {
+    const d = await get("/proof/what-was-sent" + (q ? "?q=" + encodeURIComponent(q) : ""));
+    if (!d.entries.length) {
+      $("sent-body").innerHTML = `<p class="empty">No outbound calls recorded yet. Run a task and the calls appear here.</p>`;
+      return;
+    }
+    $("sent-body").innerHTML = d.entries.map(en => `
+      <div class="row"><span>${esc(new Date(en.at * 1000).toLocaleString())} · ${esc(en.endpoint)} · ${esc(en.model)} · ~${esc(en.tokens_est)} tokens · ${esc(en.ms)} ms · ${en.ok ? "ok" : "failed"}</span>
+      <button class="ghost" data-copy="${esc(en.id)}">Copy redacted</button></div>
+      <pre id="prompt-${esc(en.id)}">${esc(en.prompt_redacted)}</pre>`).join("");
+    document.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+      const t = document.getElementById("prompt-" + b.dataset.copy).textContent;
+      navigator.clipboard.writeText(t).then(
+        () => { b.textContent = "Copied"; },
+        () => { b.textContent = "Copy failed"; },
+      );
+    });
+  } catch (err) {
+    $("sent-body").innerHTML = `<p class="error">Search failed — showing nothing rather than stale entries. ${esc(err.message)}</p>`;
+  }
+}
+let searchTimer = null;
+$("load").onclick = loadAll;
+$("show-token").onclick = () => {
+  const input = $("token");
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  $("show-token").textContent = show ? "Hide" : "Show";
+};
+$("q").addEventListener("input", () => {
+  if (!token) return;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadSent(), 200);
+});
+</script>
+</body>
+</html>

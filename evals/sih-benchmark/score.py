@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Score a benchmark results file (Sprint 1).
+"""Score a benchmark results file.
 
 Reads the newest results JSON (or --file), prints the fixture pass
 rate and the 5 SIH metrics, and writes score.json next to it.
 
-Sprint 1: the 5 SIH metrics are NOT MEASURED — the planner, executor,
-vision and redactor do not exist yet. score.py reports them as null
-with the reason, never invents a number. A score file with nulls is
-honest; a made-up 87% would be a lie.
+Sprint 6: the 5 SIH metrics now come from the real benchmark run
+(benchmark.py), which measures the loop on the 12 fixtures. score.py
+prefers the newest benchmark-*.json; a harness results-*.json still
+scores, but its metrics are null with the reason — never invented.
+A score file with nulls is honest; a made-up 87% would be a lie.
 
 Usage:
     python3 evals/sih-benchmark/score.py --latest
+    python3 evals/sih-benchmark/score.py --file results/benchmark-....json
     python3 evals/sih-benchmark/score.py --file results/results-....json
 """
 from __future__ import annotations
@@ -25,10 +27,22 @@ RESULTS_DIR = BASE / "results"
 
 
 def _latest_results() -> Path:
-    files = sorted(RESULTS_DIR.glob("results-*.json"))
+    """Newest benchmark run wins (by modification time — a custom
+    --out name must not outrank a newer run); a harness run is the
+    fallback."""
+    bench = sorted(
+        RESULTS_DIR.glob("benchmark-*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if bench:
+        return bench[-1]
+    files = sorted(
+        RESULTS_DIR.glob("results-*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
     if not files:
         raise FileNotFoundError(
-            f"no results files in {RESULTS_DIR}; run run.py first"
+            f"no results files in {RESULTS_DIR}; run benchmark.py or run.py first"
         )
     return files[-1]
 
@@ -38,6 +52,9 @@ def score(results_path: Path) -> dict:
     with open(results_path, encoding="utf-8") as f:
         results = json.load(f)
 
+    if results_path.name.startswith("benchmark-"):
+        # The benchmark file already carries the 5 real metrics.
+        return _score_benchmark(results_path, results)
     rate = results.get("fixture_pass_rate", {})
     score_doc = {
         "scored_at": results.get("generated_at"),
@@ -51,6 +68,67 @@ def score(results_path: Path) -> dict:
     out_name = results_path.name.replace("results-", "score-")
     if out_name == results_path.name:
         out_name = results_path.stem + "-score.json"
+    out_path = results_path.with_name(out_name)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(score_doc, f, indent=2)
+    score_doc["out_path"] = str(out_path)
+    return score_doc
+
+
+def _score_benchmark(results_path: Path, results: dict) -> dict:
+    """Score a benchmark-*.json: the metrics are real measurements."""
+    m = results.get("metrics", {})
+    detail = results.get("detail", {})
+    loop_detail = detail.get("loop", {})
+    pii = detail.get("pii", {})
+    score_doc = {
+        "scored_at": results.get("generated_at"),
+        "source": str(results_path),
+        "sprint": results.get("sprint"),
+        "fixtures": results.get("fixtures"),
+        "metrics": {
+            "visual_grounding_first_try": {
+                "value": m.get("visual_grounding_first_try"),
+                "target": 0.85,
+                "status": "measured",
+                "note": "mock planner — loop grounding, not a live model",
+                "human_only_handoffs": loop_detail.get("human_only_handoffs"),
+            },
+            "pii_recall": {
+                "value": m.get("pii_recall"),
+                "target": 0.95,
+                "status": "measured",
+                "scope": "regex-detectable types",
+                "worst_fixture": pii.get("worst_fixture"),
+            },
+            "pii_precision": {
+                "value": m.get("pii_precision"),
+                "target": 0.90,
+                "status": "measured",
+                "scope": "regex-detectable types",
+            },
+            "redaction_recoverable_tokens": {
+                "value": m.get("redaction_recoverable_tokens"),
+                "target": 0,
+                "status": "measured",
+            },
+            "resource_mb": {
+                "value": m.get("resource_mb"),
+                "target": 300,
+                "status": "measured",
+                "note": "extension model download size on disk",
+            },
+            "latency_p50_s": {
+                "value": m.get("latency_p50_s"),
+                "target": 6,
+                "status": "measured",
+                "note": "loop overhead with a mock planner — not live gateway latency",
+                "worst_fixture": loop_detail.get("worst_fixture"),
+            },
+        },
+        "honesty": results.get("honesty"),
+    }
+    out_name = results_path.name.replace("benchmark-", "score-")
     out_path = results_path.with_name(out_name)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(score_doc, f, indent=2)
@@ -76,18 +154,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     doc = score(results_path)
-    rate = doc["fixture_pass_rate"]
-    print(f"fixtures: {rate.get('passed')}/{rate.get('total')} passed")
+    rate = doc.get("fixture_pass_rate")
+    if rate:
+        print(f"fixtures: {rate.get('passed')}/{rate.get('total')} passed")
+    else:
+        print(f"fixtures: {doc.get('fixtures')} in the benchmark run")
     print("SIH metrics:")
+    measured = True
     for name, metric in doc["metrics"].items():
         value = metric.get("value")
         status = metric.get("status", "not_measured")
         if value is None:
+            measured = False
             print(f"  {name}: not measured ({status}) — "
                   f"target {metric.get('target')}")
         else:
             print(f"  {name}: {value} (target {metric.get('target')})")
-    print("No SIH numbers yet — a real loop has not run on the fixtures.")
+    if not measured:
+        print("No SIH numbers yet — a real loop has not run on the fixtures.")
+    elif doc.get("honesty"):
+        print(f"Note: {doc['honesty']}")
     print(f"score: {doc['out_path']}")
     return 0
 

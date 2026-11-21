@@ -13,8 +13,28 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from server.core import config, db  # noqa: E402
-from server.planner import context, router, validate  # noqa: E402
+from server.planner import context, router, scan, validate  # noqa: E402
 from server.planner.router import Endpoint, PlannerError  # noqa: E402
+
+
+class TestScanOverlap(unittest.TestCase):
+    """Sprint 6: a 16-digit card number's first 12 digits also match
+    the Aadhaar pattern — the longest match wins, the Aadhaar hit on
+    the same span is a false positive."""
+
+    def test_card_number_does_not_also_match_aadhaar(self):
+        hits = scan.scan("card 4111 1111 1111 1111 end")
+        types = [h["type"] for h in hits]
+        self.assertEqual(types, ["card_number"])
+
+    def test_aadhaar_still_detected_on_its_own(self):
+        hits = scan.scan("aadhaar 9999 8888 7777 end")
+        self.assertEqual([h["type"] for h in hits], ["aadhaar"])
+
+    def test_two_separate_pii_both_found(self):
+        hits = scan.scan("mail test.user@example.com and 9999 8888 7777")
+        types = sorted(h["type"] for h in hits)
+        self.assertEqual(types, ["aadhaar", "email"])
 
 
 def _ok_response(text: str) -> dict:

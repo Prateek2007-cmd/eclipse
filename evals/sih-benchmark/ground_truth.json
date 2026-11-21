@@ -223,6 +223,11 @@
           "location": "el_hidden_prev_email",
           "placeholder": "[EMAIL_2]",
           "type": "email"
+        },
+        {
+          "location": "el_hidden_email",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
         }
       ],
       "target_actions": [

@@ -505,6 +505,17 @@ def execute_step(
                 f"\n\nYour previous action was rejected: {last_error}. "
                 "Return a corrected action."
             )
+            # The retry text is appended AFTER the base prompt was
+            # redacted — re-scan it before the outbound call, so a
+            # retry never sends unredacted text (Sprint 6 review).
+            attempt_prompt, retry_hits = scan.redact(attempt_prompt)
+            if retry_hits:
+                _audit(
+                    conn,
+                    task_id,
+                    "task.pii_block_retry",
+                    {"step": n, "attempt": attempt, "hits": len(retry_hits)},
+                )
         raw, model, ms = call_fn(attempt_prompt, local_only=local_only)
         try:
             action = validate.parse_action(raw)

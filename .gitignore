@@ -11,6 +11,10 @@ evals/sih-benchmark/results/
 # Extension: downloaded models and build output (see models/README.md)
 extension/models/*
 !extension/models/README.md
+# Server: downloaded embeddings model (~91 MB, binary — never pushed;
+# download with scripts/download_rag_model.py or see server/rag/README)
+server/rag/models/*
+!server/rag/models/README.md
 extension/node_modules/
 extension/dist/
 extension/tests-dist/

@@ -28,6 +28,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 from ..core import db
+from ..proof import record as _record_outbound
 
 logger = logging.getLogger("eclipse.planner")
 
@@ -230,9 +231,11 @@ def call_planner(
             if ep.quota_model:
                 _quota_bump(ep.quota_model)
             logger.info("planner answered via %s (%s) in %.0f ms", ep.name, ep.model, ms)
+            _record_outbound(url, ep.model, prompt, ms, ok=True)
             return text, f"{ep.name}:{ep.model}", ms
         except Exception as exc:  # noqa: BLE001 - try the next model
             ms = (time.time() - started) * 1000
             errors.append(f"{ep.name}: {exc} ({ms:.0f} ms)")
+            _record_outbound(url, ep.model, prompt, ms, ok=False)
             continue
     raise PlannerError("planner failed on every endpoint: " + "; ".join(errors))

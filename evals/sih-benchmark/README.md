@@ -40,8 +40,10 @@ python3 evals/sih-benchmark/score.py --latest
 - Resource use (20%): RAM ≤500MB, models ≤300MB.
 - Latency (15%): ≤6s per step, demo task ≤90s.
 
-Sprint 1: the harness runs structural checks only (files exist, served
-over HTTP, ground-truth element ids and PII locations resolve). The 5
-SIH metrics are recorded as not measured, with the reason, until the
-real loop (Sprints 2-4) runs on the fixtures. No number on any slide
-until `score.py` produces it from a real benchmark run.
+Sprint 6: `benchmark.py` runs the real loop on the fixtures and
+produces the 5 SIH metrics for real (grounding, PII recall/precision,
+redaction, resources, latency). `score.py --latest` prefers the newest
+benchmark run. Grounding and latency are measured with a mock planner
+— they measure the loop, not a live model; the benchmark and the score
+file say so. No number on any slide until `score.py` produces it from
+a real benchmark run.

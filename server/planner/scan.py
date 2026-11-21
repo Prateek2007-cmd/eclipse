@@ -53,38 +53,78 @@ def _placeholder(pii_type: str, n: int) -> str:
 def scan(text: str, raw_values: list[str] | None = None) -> list[dict]:
     """Find structured PII and recorded raw values in `text`.
 
-    Returns a list of {type, value} hits (deduplicated by value).
-    `raw_values` are values the redactor recorded (e.g. a name) that
-    no regex can find — any of them surviving in the text is a hit.
+    Returns a list of {type, value, start, end} hits — one per
+    occurrence (the same value at two positions is two hits; both
+    must be redacted). `raw_values` are values the redactor
+    recorded (e.g. a name) that no regex can find — any of them
+    surviving in the text is a hit. The spans let redact() replace
+    by position instead of by value, so a short hit that is a
+    substring of a longer hit elsewhere cannot mangle the longer
+    replacement.
     """
     hits: list[dict] = []
-    seen: set[str] = set()
+    # Collect every match with its span, then resolve overlaps:
+    # at any start position the LONGEST match wins (a 16-digit card
+    # number's first 12 digits also match the Aadhaar pattern — the
+    # card is the real hit, the Aadhaar is a false positive on the
+    # same span). This mirrors the extension redactor's
+    # earliest+longest rule.
+    candidates: list[tuple[int, int, str, str]] = []
     for pii_type, pattern in PII_PATTERNS:
         for m in pattern.finditer(text):
-            value = m.group(0)
-            if value not in seen:
-                seen.add(value)
-                hits.append({"type": pii_type, "value": value})
+            candidates.append((m.start(), m.end(), pii_type, m.group(0)))
+    candidates.sort(key=lambda c: (c[0], -(c[1] - c[0])))
+    used_until = -1
+    for start, end, pii_type, value in candidates:
+        if start < used_until:
+            continue
+        used_until = end
+        hits.append({"type": pii_type, "value": value, "start": start, "end": end})
     for value in raw_values or []:
-        if len(value) >= 4 and value in text and value not in seen:
-            seen.add(value)
-            hits.append({"type": "unredacted-value", "value": value})
+        if len(value) < 4:
+            continue
+        start = text.find(value)
+        while start >= 0:
+            hits.append(
+                {
+                    "type": "unredacted-value",
+                    "value": value,
+                    "start": start,
+                    "end": start + len(value),
+                }
+            )
+            start = text.find(value, start + len(value))
+    hits.sort(key=lambda h: h["start"])
     return hits
 
 
 def redact(text: str, raw_values: list[str] | None = None) -> tuple[str, list[dict]]:
-    """Replace every hit with its placeholder; return (clean, hits)."""
+    """Replace every hit with its placeholder; return (clean, hits).
+
+    Replacement is by span, not by value: a shorter hit value that
+    is a substring of a longer hit at a different position can no
+    longer mangle the longer replacement (str.replace would have
+    rewritten the inside of the longer value).
+    """
     hits = scan(text, raw_values)
     if not hits:
         return text, []
-    clean = text
     counters: dict[str, int] = {}
+    parts: list[str] = []
+    pos = 0
     for hit in hits:
+        # Skip a hit that overlaps one already replaced (a raw
+        # value can contain a pattern hit's span).
+        if hit["start"] < pos:
+            continue
         pii_type = hit["type"]
         counters[pii_type] = counters.get(pii_type, 0) + 1
         placeholder = _placeholder(pii_type, counters[pii_type])
-        clean = clean.replace(hit["value"], placeholder)
+        parts.append(text[pos : hit["start"]])
+        parts.append(placeholder)
+        pos = hit["end"]
         logger.warning(
             "second PII scan blocked %s (redacted to %s)", pii_type, placeholder
         )
-    return clean, hits
+    parts.append(text[pos:])
+    return "".join(parts), hits
