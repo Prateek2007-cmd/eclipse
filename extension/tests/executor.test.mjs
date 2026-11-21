@@ -410,3 +410,21 @@ test("executor: a click result URL never contains a null origin", async () => {
   assert.equal(r.ok, true, r.detail);
   assert.equal(r.url.includes("null"), false, r.url);
 });
+
+test("content: the fill map becomes a function, not a Record (B1)", async () => {
+  // The vault fill crosses chrome.runtime.sendMessage as a plain
+  // Record; the content script must turn it into the executor's
+  // fill function. Spreading the Record into the options made
+  // options.fill truthy (the Record) so the guard never fired
+  // and executeAction called a plain object as a function.
+  const { buildExecuteOptions } = await import("../tests-dist/execute-options.js");
+  const options = buildExecuteOptions(
+    { fill: { "[CARD_LAST4]": "4111 1111 1111 1111" }, taskId: "task-1" },
+    undefined,
+  );
+  assert.equal(typeof options.fill, "function");
+  assert.equal(options.fill("[CARD_LAST4]"), "4111 1111 1111 1111");
+  assert.equal(options.fill("[CVV]"), undefined);
+  const noFill = buildExecuteOptions({ taskId: "task-1" }, undefined);
+  assert.equal(noFill.fill, undefined);
+});

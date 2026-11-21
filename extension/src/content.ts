@@ -11,6 +11,7 @@
  *     real element id from the current walk.
  */
 import { executeAction, type ExecutorAction, type ExecuteOptions } from "./executor.js";
+import { buildExecuteOptions } from "./execute-options.js";
 import { walkDom, walkDomWithNodes } from "./vision/dom-walker.js";
 import type { Box, ElementInfo } from "./vision/types.js";
 
@@ -68,19 +69,12 @@ chrome.runtime.onMessage.addListener(
           // caller) do we fall back to this walk's info.
           const { info, nodes } = walkDomWithNodes(document);
           const fresh = info.find((e) => e.id === msg.action!.element_id);
-          const options: ExecuteOptions = {
-            ...(msg.options ?? {}),
-            expected: msg.options?.expected ?? fresh,
-          };
           // The vault fill is a plain map over the message (a
           // function cannot cross chrome.runtime.sendMessage);
-          // build the fill function from it here. Sprint 5 wires
-          // the vault into the background script, which will send
-          // this map.
-          const fillMap = (msg.options as { fill?: Record<string, string> } | undefined)?.fill;
-          if (fillMap && !options.fill) {
-            options.fill = (token: string) => fillMap[token];
-          }
+          // buildExecuteOptions turns it into the executor's fill
+          // function — the raw Record must never be spread into
+          // the options (see execute-options.ts for why).
+          const options = buildExecuteOptions(msg.options, fresh);
           const result = await executeAction(msg.action!, document, nodes, options);
           sendResponse(result);
         } catch (err) {

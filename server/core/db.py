@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS quota(
 CREATE TABLE IF NOT EXISTS receipts(
   id TEXT PRIMARY KEY, task_id TEXT, role_id TEXT, title TEXT, company TEXT,
   url TEXT, status TEXT, confirmation TEXT, created_at INTEGER);
+CREATE TABLE IF NOT EXISTS mail_drafts(
+  id TEXT PRIMARY KEY, task_id TEXT, recipient TEXT, role_id TEXT,
+  subject TEXT, body TEXT, status TEXT, created_at INTEGER,
+  updated_at INTEGER);
+CREATE TABLE IF NOT EXISTS mail_log(
+  id TEXT PRIMARY KEY, draft_id TEXT, recipient TEXT, role_id TEXT,
+  status TEXT, detail TEXT, created_at INTEGER);
 """
 
 # Verified free top 5 (Sprint 0 probe, 2026-11-21). gpt-oss-120b is
@@ -120,6 +127,35 @@ def migrate(db_path: Path | None = None) -> None:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_task_role"
                 " ON receipts(task_id, role_id)"
+            )
+            # Sprint 5: cold-mail drafts + log (Flow 2).
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "mail_drafts" not in tables:
+                conn.execute(
+                    "CREATE TABLE mail_drafts("
+                    " id TEXT PRIMARY KEY, task_id TEXT, recipient TEXT,"
+                    " role_id TEXT, subject TEXT, body TEXT, status TEXT,"
+                    " created_at INTEGER, updated_at INTEGER)"
+                )
+            if "mail_log" not in tables:
+                conn.execute(
+                    "CREATE TABLE mail_log("
+                    " id TEXT PRIMARY KEY, draft_id TEXT, recipient TEXT,"
+                    " role_id TEXT, status TEXT, detail TEXT,"
+                    " created_at INTEGER)"
+                )
+            # Sprint 5 fix: dedup is a constraint, not a check —
+            # two concurrent drafts for the same (recipient, role)
+            # must not both succeed (check-then-insert races).
+            # The index is partial: only a live draft (draft /
+            # approved / sent) blocks a new one — a bounced or
+            # no-reply draft must not block a retry.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS"
+                " idx_mail_drafts_recipient_role"
+                " ON mail_drafts(LOWER(recipient), role_id)"
+                " WHERE status IN ('draft', 'approved', 'sent')"
             )
             # Sprint 4 fix: grants carry a detail (JSON: the step,
             # element and role the approval covers, §5.4) so one

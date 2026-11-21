@@ -30,6 +30,7 @@ TOKEN = "test-token-123"
 EXPECTED_TABLES = {
     "tasks", "steps", "checkpoints", "memory", "facts", "routines",
     "audit_log", "rag_chunks", "watches", "grants", "quota", "receipts",
+    "mail_drafts", "mail_log",
 }
 
 

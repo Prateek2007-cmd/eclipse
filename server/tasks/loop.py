@@ -208,6 +208,33 @@ def _allowed_sites(constraints: str) -> list[str] | None:
     return None
 
 
+def _origin_of(url: str) -> str:
+    """The origin (scheme + host) of a URL — the vault keys
+    stored passwords by origin."""
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        return f"{parsed.scheme}://{parsed.hostname}" if parsed.hostname else ""
+    except Exception:  # noqa: BLE001 - a bad URL is not an origin
+        return ""
+
+
+def _strip_url(url: str) -> str:
+    """Origin + pathname only (no query string, no fragment).
+    The same rule the executor's safeUrl applies — used for
+    verify reasons and receipt confirmations, which persist."""
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if parsed.hostname:
+            return f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+        return url
+    except Exception:  # noqa: BLE001 - a bad URL is returned as-is
+        return url
+
+
 def _is_human_only_description(description: str) -> bool:
     lowered = (description or "").lower()
     return any(m in lowered for m in HUMAN_ONLY_MARKERS)
@@ -512,12 +539,21 @@ def execute_step(
         # Human-only check on the LIVE action: a step that targets
         # a CAPTCHA element (or a verification-code field) is a
         # handoff even when the plan description did not say so.
+        # "otp" and "passkey" and "3-d secure" are in the list too:
+        # the fixture's OTP field is named "OTP (sent to your
+        # phone)" — neither "captcha" nor "verification code" —
+        # so without them the OTP step fails in the executor
+        # ("placeholder [OTP] has no vault value") and retries 3
+        # times before asking the user with a generic failure.
         target = next(
             (e for e in elements if e.get("id") == action.get("element_id")), None
         )
         if target:
             target_text = f"{target.get('name','')} {target.get('text','')}".lower()
-            if "captcha" in target_text or "verification code" in target_text:
+            if any(marker in target_text for marker in (
+                "captcha", "verification code", "otp", "passkey",
+                "3-d secure", "3d secure",
+            )):
                 _handoff(conn, task_id, n, f"action targets a human-only element: {action.get('element_id')}")
                 raise ValueError(f"step {n} targets a human-only element")
         # Never retry a submit: refuse a click on an element that
@@ -601,6 +637,63 @@ def execute_step(
         target = next(
             (e for e in elements if e.get("id") == action.get("element_id")), None
         )
+        # The fill map (Sprint 5, §6.7): when the action's text
+        # carries placeholders, attach the placeholder → value map
+        # for the extension. Secret placeholders need the vault
+        # unlocked for the task AND an approval grant (approval
+        # BEFORE vault fill). The map travels only in this local
+        # execute response — never to the planner, never in a log.
+        # Never log the execute response body (it may carry the
+        # fill map with a full card number).
+        fill_map: dict[str, str] = {}
+        fill_denied_reason: str | None = None
+        if action.get("action") == "type" and action.get("text"):
+            import re as _re
+
+            from ..vault import fill as _fill
+            from ..api.vault_api import VAULT as _VAULT
+
+            tokens = _re.findall(r"\[[A-Z0-9_]+\]", action["text"])
+            if tokens:
+                now = int(time.time())
+                # The fill needs an approval grant for the TASK —
+                # not a mail-draft approval (whose detail names a
+                # draft_id). A mail approval must never authorise a
+                # card fill. The grant is not consumed by a fill
+                # (a checkout fills several fields in one task),
+                # but its scope is checked on every fill.
+                approval_grants = [
+                    dict(row) for row in conn.execute(
+                        "SELECT id, detail FROM grants WHERE origin = ?"
+                        " AND scope = 'approve' AND expires_at > ?",
+                        (task_id, now),
+                    ).fetchall()
+                ]
+                fill_map, fill_denied_reason = _fill.build_fill_map(
+                    conn, task_id, tokens,
+                    _origin_of(observation.get("url", "")),
+                    _VAULT, approval_grants,
+                    constraints=task.get("constraints") or "",
+                    target=target,
+                )
+                # Approval-before-fill ordering (B3): a secret
+                # placeholder with no fill is not a silent empty
+                # map — the user must be asked for approval (the
+                # type steps are not consequential, so the loop
+                # would otherwise never prompt). Set the task to
+                # ask_user and raise the approval-needed error, so
+                # the user gets the approval card with a clear
+                # reason, not a generic failure after 3 retries.
+                secret_tokens = [t for t in tokens if t in _fill.SECRET_PLACEHOLDERS]
+                if secret_tokens and any(t not in fill_map for t in secret_tokens):
+                    _set_task_status(conn, task_id, "ask_user")
+                    _audit(conn, task_id, "task.fill_denied",
+                           {"step": n, "tokens": secret_tokens,
+                            "reason": fill_denied_reason})
+                    raise ValueError(
+                        f"approval needed before the vault can fill: "
+                        f"{fill_denied_reason or 'no fill available'}"
+                    )
         return {
             "action": action,
             "expected_end_state": plan_step.get("expected_end_state", ""),
@@ -608,6 +701,8 @@ def execute_step(
             "task_id": task_id,
             "element": target,
             "allowed_sites": _allowed_sites(task.get("constraints") or ""),
+            "fill": fill_map,
+            "fill_denied_reason": fill_denied_reason,
         }
     # 3 failed planner calls: two failed groundings in a row → ask user.
     conn.execute(
@@ -672,7 +767,14 @@ def verify_step(
     texts = " ".join(
         f"{e.get('name','')} {e.get('text','')} {e.get('value','')}" for e in elements
     )
-    url = new_observation.get("url", "")
+    # The verify reason and the receipt confirmation persist in the
+    # steps table and the checkpoint summaries — strip the query
+    # string and fragment from both URLs first (a password-reset
+    # token or an email in a query string must not be stored).
+    # This is the same origin + pathname rule the executor's
+    # safeUrl applies.
+    url = _strip_url(new_observation.get("url", ""))
+    previous_url = _strip_url(previous_url or "")
     expected = expected_end_state or ""
     el_id = action.get("element_id")
     acted = next((e for e in elements if e.get("id") == el_id), None)

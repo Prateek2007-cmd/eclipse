@@ -16,6 +16,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -88,49 +89,75 @@ class TestTaskLoop(unittest.TestCase):
         return obs
 
     def test_login_flow_end_to_end(self):
+        # The login needs the vault: the password is a secret
+        # placeholder, so the vault must be unlocked for the task
+        # (with the password stored for this origin) and an
+        # approval grant must exist — otherwise execute_step asks
+        # the user for approval instead of filling (B3).
+        from server.api.vault_api import VAULT
+        from server.vault import grants as grant_store
+
+        VAULT.create("correct horse battery staple")
+        VAULT.store_password("http://localhost", "password", "hunter2")
         task_id = loop.create_task(
             self.conn, "Log in to the test portal", "allowed sites: localhost"
         )
-        steps = loop.plan_task(self.conn, task_id, call_fn=_mock_plan)
-        self.assertEqual(len(steps), 3)
+        grant_store.GRANTS.create(task_id)
+        import time as _time
 
-        # Step 1: type the email, then verify by re-observing.
-        # The baseline is the pre-action observation (empty field).
-        r1 = loop.execute_step(
-            self.conn, task_id, 1, LOGIN_OBS, call_fn=_mock_action_for(1)
+        self.conn.execute(
+            "INSERT INTO grants (id, origin, scope, expires_at, created_at)"
+            " VALUES (?, ?, 'approve', ?, ?)",
+            (uuid.uuid4().hex[:12], task_id, int(_time.time()) + 600,
+             int(_time.time())),
         )
-        self.assertEqual(r1["action"]["element_id"], "el_login_email")
-        v1 = loop.verify_step(
-            self.conn, task_id, 1,
-            self._obs_with_value("el_login_email", "[EMAIL_1]"),
-            r1["expected_end_state"], previous_url=LOGIN_OBS["url"],
-            previous_observation=LOGIN_OBS,
-        )
-        self.assertTrue(v1["verified"], v1)
+        self.conn.commit()
+        try:
+            steps = loop.plan_task(self.conn, task_id, call_fn=_mock_plan)
+            self.assertEqual(len(steps), 3)
 
-        # Step 2: type the password, verify.
-        r2 = loop.execute_step(
-            self.conn, task_id, 2, LOGIN_OBS, call_fn=_mock_action_for(2)
-        )
-        v2 = loop.verify_step(
-            self.conn, task_id, 2,
-            self._obs_with_value("el_login_password", "[PASSWORD_1]"),
-            r2["expected_end_state"], previous_url=LOGIN_OBS["url"],
-            previous_observation=LOGIN_OBS,
-        )
-        self.assertTrue(v2["verified"], v2)
+            # Step 1: type the email, then verify by re-observing.
+            # The baseline is the pre-action observation (empty field).
+            r1 = loop.execute_step(
+                self.conn, task_id, 1, LOGIN_OBS, call_fn=_mock_action_for(1)
+            )
+            self.assertEqual(r1["action"]["element_id"], "el_login_email")
+            v1 = loop.verify_step(
+                self.conn, task_id, 1,
+                self._obs_with_value("el_login_email", "[EMAIL_1]"),
+                r1["expected_end_state"], previous_url=LOGIN_OBS["url"],
+                previous_observation=LOGIN_OBS,
+            )
+            self.assertTrue(v1["verified"], v1)
 
-        # Step 3: click submit, verify by the URL changing.
-        r3 = loop.execute_step(
-            self.conn, task_id, 3, LOGIN_OBS, call_fn=_mock_action_for(3)
-        )
-        new_obs = {"url": "http://localhost/application-form.html", "elements": []}
-        v3 = loop.verify_step(
-            self.conn, task_id, 3, new_obs,
-            r3["expected_end_state"], previous_url=LOGIN_OBS["url"],
-            previous_observation=LOGIN_OBS,
-        )
-        self.assertTrue(v3["verified"], v3)
+            # Step 2: type the password, verify. The fill map
+            # carries the stored password for the password field.
+            r2 = loop.execute_step(
+                self.conn, task_id, 2, LOGIN_OBS, call_fn=_mock_action_for(2)
+            )
+            self.assertEqual(r2.get("fill", {}).get("[PASSWORD_1]"), "hunter2", r2)
+            v2 = loop.verify_step(
+                self.conn, task_id, 2,
+                self._obs_with_value("el_login_password", "[PASSWORD_1]"),
+                r2["expected_end_state"], previous_url=LOGIN_OBS["url"],
+                previous_observation=LOGIN_OBS,
+            )
+            self.assertTrue(v2["verified"], v2)
+
+            # Step 3: click submit, verify by the URL changing.
+            r3 = loop.execute_step(
+                self.conn, task_id, 3, LOGIN_OBS, call_fn=_mock_action_for(3)
+            )
+            new_obs = {"url": "http://localhost/application-form.html", "elements": []}
+            v3 = loop.verify_step(
+                self.conn, task_id, 3, new_obs,
+                r3["expected_end_state"], previous_url=LOGIN_OBS["url"],
+                previous_observation=LOGIN_OBS,
+            )
+            self.assertTrue(v3["verified"], v3)
+        finally:
+            VAULT.lock()
+            grant_store.GRANTS.revoke_all()
 
         task = loop.get_task(self.conn, task_id)
         self.assertEqual(task["status"], "done")
