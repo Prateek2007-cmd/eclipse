@@ -32,7 +32,20 @@ chrome.runtime.onMessage.addListener(
       taskKind?: string;
       egressTarget?: string;
       action?: { action: string; element_id?: string; text?: string; url?: string; seconds?: number; reason?: string };
-      options?: { taskId?: string; allowedSites?: string[] };
+      // From the server's execute response: the task id (the
+      // submit guard key), the allowed sites, the element info
+      // the planner saw (the fingerprint), and the vault fill map
+      // (placeholder → value, Sprint 5). Without these the live
+      // path has no taskId, no allow-list and no fingerprint.
+      options?: {
+        taskId?: string;
+        allowedSites?: string[];
+        expected?: {
+          id: string; tag: string; role: string; name: string;
+          text: string; sensitive: boolean;
+        };
+        fill?: Record<string, string>;
+      };
     },
     _sender,
     sendResponse,

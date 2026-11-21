@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parseHTML } from "linkedom";
 
-import { walkDom, resolveElement } from "../tests-dist/vision/dom-walker.js";
+import { walkDom, walkDomWithNodes, resolveElement } from "../tests-dist/vision/dom-walker.js";
 import { redactObservation, redactText, mergeBoxes } from "../tests-dist/vision/redactor.js";
 import { groupIntoLines } from "../tests-dist/vision/ocr.js";
 import { observe } from "../tests-dist/vision/observe.js";
@@ -359,4 +359,16 @@ test("redactor: mergeBoxes unions overlaps", () => {
     { x: 0.8, y: 0.8, w: 0.1, h: 0.1 },
   ]);
   assert.equal(merged.length, 2);
+});
+
+test("walker: the 2000-element cap reports truncated", () => {
+  // A page with more elements than the cap: the walk reports
+  // truncated so the planner knows the observation is incomplete.
+  const html = "<html><body>" + "<div>item</div>".repeat(2500) + "</body></html>";
+  const { document } = parseHTML(html);
+  const { info, truncated } = walkDomWithNodes(document, { maxElements: 10 });
+  assert.equal(info.length, 10);
+  assert.equal(truncated, true);
+  const full = walkDomWithNodes(document, { maxElements: 3000 });
+  assert.equal(full.truncated, false);
 });

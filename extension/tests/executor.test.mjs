@@ -301,3 +301,112 @@ test("executor: a file input click is refused (human-only)", async () => {
   assert.equal(r.ok, false);
   assert.match(r.detail, /human-only/);
 });
+
+test("executor: a type=button Continue inside a form is a submit (second click refused)", async () => {
+  resetExecutedSubmits();
+  const { document } = parseHTML(
+    '<form id="f"><button id="el_continue" type="button">Continue</button></form>',
+  );
+  const { nodes } = walk(document);
+  const first = await executeAction(
+    { action: "click", element_id: "el_continue" }, document, nodes,
+    { taskId: "task-1" },
+  );
+  assert.equal(first.ok, true, first.detail);
+  const second = await executeAction(
+    { action: "click", element_id: "el_continue" }, document, nodes,
+    { taskId: "task-1" },
+  );
+  assert.equal(second.ok, false);
+  assert.match(second.detail, /already executed/);
+});
+
+test("executor: a type=button Apply now NOT in a form is not a submit", async () => {
+  resetExecutedSubmits();
+  const { document } = parseHTML(
+    '<button id="el_apply_1" type="button">Apply now</button>',
+  );
+  const { nodes } = walk(document);
+  const first = await executeAction(
+    { action: "click", element_id: "el_apply_1" }, document, nodes,
+    { taskId: "task-1" },
+  );
+  assert.equal(first.ok, true, first.detail);
+  const second = await executeAction(
+    { action: "click", element_id: "el_apply_1" }, document, nodes,
+    { taskId: "task-1" },
+  );
+  assert.equal(second.ok, true, second.detail);
+});
+
+test("executor: a javascript: href link click is refused", async () => {
+  const { document } = parseHTML(
+    '<a id="el_js" href="javascript:alert(1)">click me</a>',
+  );
+  const { nodes } = walk(document);
+  const r = await executeAction(
+    { action: "click", element_id: "el_js" }, document, nodes,
+  );
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /javascript/);
+});
+
+test("executor: typing into a contenteditable sets its text", async () => {
+  const { document } = parseHTML(
+    '<div id="el_ed" contenteditable="true"></div>',
+  );
+  const { nodes } = walk(document);
+  const r = await executeAction(
+    { action: "type", element_id: "el_ed", text: "hello" }, document, nodes,
+  );
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(nodes.get("el_ed").textContent, "hello");
+});
+
+test("executor: navigate detail strips the query string", async () => {
+  const { document } = parseHTML("<html><body></body></html>");
+  const { nodes } = walk(document);
+  const r = await executeAction(
+    { action: "navigate", url: "https://internshala.com/jobs?token=abc123" },
+    document, nodes, { allowedSites: ["internshala.com"] },
+  );
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.url, "https://internshala.com/jobs");
+  assert.equal(r.detail, "navigating to https://internshala.com/jobs");
+});
+
+test("executor: select detail does not echo the option label", async () => {
+  const doc = loadFixture("application-form.html");
+  const { nodes } = walk(doc);
+  const r = await executeAction(
+    { action: "select", element_id: "el_app_year", text: "2nd year" },
+    doc, nodes,
+  );
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.detail, "selected an option in el_app_year");
+});
+
+test("executor: wait with NaN seconds reports 1s", async () => {
+  const { document } = parseHTML("<html><body></body></html>");
+  const { nodes } = walk(document);
+  const r = await executeAction(
+    { action: "wait", seconds: NaN }, document, nodes,
+  );
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.detail, "waited 1s");
+});
+
+test("executor: a click result URL never contains a null origin", async () => {
+  // safeUrl("about:blank") used to return "nullblank" (origin
+  // "null" + pathname "blank"). In linkedom the doc URL is "",
+  // so the result is ""; in a browser it is "about:blank".
+  // Either way it must never be "nullblank".
+  const doc = loadFixture("job-listing.html");
+  const { nodes } = walk(doc);
+  const r = await executeAction(
+    { action: "click", element_id: "el_apply_1", reason: "apply" },
+    doc, nodes,
+  );
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(r.url.includes("null"), false, r.url);
+});

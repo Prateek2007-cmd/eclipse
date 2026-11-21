@@ -42,10 +42,13 @@ CREATE TABLE IF NOT EXISTS watches(
   threshold TEXT, status TEXT, muted_until INTEGER, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS grants(
   id TEXT PRIMARY KEY, origin TEXT, scope TEXT, expires_at INTEGER,
-  created_at INTEGER);
+  created_at INTEGER, detail TEXT);
 CREATE TABLE IF NOT EXISTS quota(
   model TEXT PRIMARY KEY, used_today INTEGER, limit_day INTEGER,
   reset_at INTEGER);
+CREATE TABLE IF NOT EXISTS receipts(
+  id TEXT PRIMARY KEY, task_id TEXT, role_id TEXT, title TEXT, company TEXT,
+  url TEXT, status TEXT, confirmation TEXT, created_at INTEGER);
 """
 
 # Verified free top 5 (Sprint 0 probe, 2026-11-21). gpt-oss-120b is
@@ -102,6 +105,28 @@ def migrate(db_path: Path | None = None) -> None:
                 conn.execute("ALTER TABLE steps ADD COLUMN scan_blocks INTEGER DEFAULT 0")
             if "grounding_failures" not in step_cols:
                 conn.execute("ALTER TABLE steps ADD COLUMN grounding_failures INTEGER DEFAULT 0")
+            # Sprint 4: receipts (one per verified submit, §6.9).
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "receipts" not in tables:
+                conn.execute(
+                    "CREATE TABLE receipts("
+                    " id TEXT PRIMARY KEY, task_id TEXT, role_id TEXT,"
+                    " title TEXT, company TEXT, url TEXT, status TEXT,"
+                    " confirmation TEXT, created_at INTEGER)"
+                )
+            # Sprint 4 fix: one receipt per (task, role) — a duplicate
+            # POST must not create a second row.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_task_role"
+                " ON receipts(task_id, role_id)"
+            )
+            # Sprint 4 fix: grants carry a detail (JSON: the step,
+            # element and role the approval covers, §5.4) so one
+            # approval cannot be consumed by a different submit.
+            grant_cols = {r[1] for r in conn.execute("PRAGMA table_info(grants)")}
+            if "detail" not in grant_cols:
+                conn.execute("ALTER TABLE grants ADD COLUMN detail TEXT")
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

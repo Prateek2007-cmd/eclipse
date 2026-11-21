@@ -96,9 +96,15 @@ def get_task(task_id: str, _token: str = Depends(require_token)):
                 (task_id,),
             ).fetchall()
         ]
+        # §6.1: the task response returns status, plan, steps AND
+        # receipts.
+        from ..jobs import receipts as _receipts
+
+        report = _receipts.task_report(conn, task_id)
     finally:
         conn.close()
-    return {**task, "steps": steps, "checkpoints": checkpoints}
+    return {**task, "steps": steps, "checkpoints": checkpoints,
+            "receipts": report["submitted"] + report["failed"]}
 
 
 @router.get("/tasks")
@@ -184,6 +190,12 @@ def verify_step(task_id: str, n: int, body: VerifyIn, _token: str = Depends(requ
 
 class ApproveIn(BaseModel):
     approval_id: str = Field(..., min_length=1, max_length=120)
+    # What the approval covers (§5.4): the step, the element and
+    # the role. A grant scoped to one element/role cannot be
+    # consumed by a different submit.
+    step: int | None = Field(default=None, ge=1)
+    element_id: str | None = Field(default=None, max_length=200)
+    role_id: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/tasks/{task_id}/approve")
@@ -199,6 +211,7 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
     _task_or_404(task_id)
     conn = _conn()
     try:
+        import json
         import time
         import uuid
 
@@ -209,10 +222,17 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
             conn, task_id, "task.approve",
             {"approval_id": body.approval_id},
         )
+        detail = {
+            k: v for k, v in {
+                "step": body.step, "element_id": body.element_id,
+                "role_id": body.role_id,
+            }.items() if v is not None
+        }
         conn.execute(
-            "INSERT INTO grants (id, origin, scope, expires_at, created_at)"
-            " VALUES (?, ?, 'approve', ?, ?)",
-            (uuid.uuid4().hex[:12], task_id, now + 600, now),
+            "INSERT INTO grants (id, origin, scope, expires_at, created_at, detail)"
+            " VALUES (?, ?, 'approve', ?, ?, ?)",
+            (uuid.uuid4().hex[:12], task_id, now + 600, now,
+             json.dumps(detail) if detail else None),
         )
         conn.execute(
             "UPDATE tasks SET status = 'planned', updated_at = ?"
@@ -223,6 +243,24 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
     finally:
         conn.close()
     return {"task_id": task_id, "status": "planned", "approval_id": body.approval_id}
+
+
+@router.delete("/tasks/{task_id}/grants")
+def revoke_grants(task_id: str, _token: str = Depends(require_token)):
+    """Revoke every outstanding approval grant for a task (§5.4:
+    the user can revoke any grant in one click)."""
+    _task_or_404(task_id)
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "DELETE FROM grants WHERE origin = ? AND scope = 'approve'",
+            (task_id,),
+        )
+        conn.commit()
+        revoked = cur.rowcount
+    finally:
+        conn.close()
+    return {"task_id": task_id, "revoked": revoked}
 
 
 def _set_status(task_id: str, status: str) -> dict:

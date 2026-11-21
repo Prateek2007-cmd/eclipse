@@ -213,6 +213,112 @@ def _is_human_only_description(description: str) -> bool:
     return any(m in lowered for m in HUMAN_ONLY_MARKERS)
 
 
+def _role_from_constraints(constraints: str) -> dict:
+    """The apply flow carries the role in the task constraints
+    ("role: role_1", "url: http://…"). Without it the loop has no
+    role context and cannot check "already applied" (§6.9)."""
+    role_id = url = None
+    for line in (constraints or "").splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("role:"):
+            role_id = stripped.split(":", 1)[1].strip()
+        elif stripped.lower().startswith("url:"):
+            url = stripped.split(":", 1)[1].strip()
+    return {"role_id": role_id, "url": url}
+
+
+def _is_consequential(action: dict, elements: list[dict]) -> bool:
+    """Is this action consequential (a real submit / send / pay)?
+    The server now sees the element's type and whether it sits in
+    a form (ElementInfo carries both) — the precise signal, not
+    just the name. "Apply now" on a listing is NOT consequential:
+    it only opens the form. A button inside a form IS (a
+    multi-step "Continue" submits the form), as is any button
+    whose type is submit, or whose name says submit / confirm /
+    pay / send. This matches the executor's guard, so one
+    application costs one approval, not two."""
+    if action.get("action") != "click":
+        return False
+    target = next(
+        (e for e in elements if e.get("id") == action.get("element_id")), None
+    )
+    if target is None:
+        return False
+    el_type = str(target.get("type") or "").lower()
+    if el_type in ("submit", "image"):
+        return True
+    if target.get("in_form"):
+        return True
+    text = f"{target.get('name','')} {target.get('text','')}".lower()
+    return any(w in text for w in ("submit", "confirm", "place order", "pay", "send"))
+
+
+# Consequential goal verbs (§5.4): purchases, sends and
+# applications all need a fresh approval. "Log in to the test
+# portal" has none of these, so the login-fixture flow stays
+# approval-free.
+_CONSEQUENTIAL_GOAL_WORDS = (
+    "apply", "buy", "purchase", "pay", "send", "mail", "email",
+    "transfer", "checkout", "order", "subscribe", "book",
+)
+
+
+def _requires_approval(task: dict) -> bool:
+    """A task requires approval before a consequential action when
+    its goal names one (buy, pay, send, apply, …) or its
+    constraints say so."""
+    goal = (task.get("goal") or "").lower()
+    constraints = (task.get("constraints") or "").lower()
+    return (
+        any(re.search(rf"\b{w}\b", goal) for w in _CONSEQUENTIAL_GOAL_WORDS)
+        or "approval" in constraints
+    )
+
+
+def _consume_approval(conn, task_id: str, element_id: str | None = None,
+                      role_id: str | None = None) -> bool:
+    """Consume one valid approval grant for this task (a grant is
+    single-use; purchases never get a lasting allow, §5.4).
+
+    Atomic: a single DELETE whose subquery picks one grant, so two
+    concurrent submits cannot spend the same grant (the old
+    SELECT-then-DELETE raced). Action-scoped: a grant whose detail
+    names an element or role only covers that element or role —
+    an approval for role A cannot be consumed by a submit for
+    role B. A grant with no detail (the old shape) covers any
+    action on the task.
+    """
+    now = int(time.time())
+    # Pick one matching grant, preferring the most specific one.
+    rows = conn.execute(
+        "SELECT id, detail FROM grants WHERE origin = ? AND scope = 'approve'"
+        " AND expires_at > ? ORDER BY created_at ASC",
+        (task_id, now),
+    ).fetchall()
+    chosen = None
+    for row in rows:
+        detail = {}
+        if row["detail"]:
+            try:
+                detail = json.loads(row["detail"])
+            except (ValueError, TypeError):
+                detail = {}
+        if not detail:
+            chosen = row["id"]
+            break
+        if element_id and detail.get("element_id") == element_id:
+            chosen = row["id"]
+            break
+        if role_id and detail.get("role_id") == role_id:
+            chosen = row["id"]
+            break
+    if chosen is None:
+        return False
+    cur = conn.execute("DELETE FROM grants WHERE id = ?", (chosen,))
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def _handoff(conn, task_id: str, n: int, reason: str) -> None:
     """Human-only step (§5.5): pause, save a checkpoint, log the
     handoff in the audit trail, and record the 10-minute deadline.
@@ -433,7 +539,55 @@ def execute_step(
                     raise validate.ValidationError(
                         f"element {action['element_id']} was already clicked successfully in this task"
                     )
+        # Already applied (§6.9): before a consequential click,
+        # check the receipts + memory. A role applied to in an
+        # earlier task (or on another page/element) is never
+        # re-submitted — the loop's same-element-in-same-task check
+        # alone is not enough. The role comes from the task
+        # constraints ("role: …", "url: …").
+        role_ctx = _role_from_constraints(task.get("constraints") or "")
+        if _is_consequential(action, elements) and (
+            role_ctx["role_id"] or role_ctx["url"]
+        ):
+            from ..jobs import applied as _applied
+
+            if _applied.is_already_applied(
+                conn, role_ctx["role_id"] or role_ctx["url"], role_ctx["url"]
+            ):
+                _set_task_status(conn, task_id, "ask_user")
+                _audit(conn, task_id, "task.already_applied",
+                       {"step": n, "role_id": role_ctx["role_id"],
+                        "url": role_ctx["url"]})
+                raise ValueError(
+                    f"already applied to {role_ctx['role_id'] or role_ctx['url']}"
+                    " (receipt on file — no re-submit)"
+                )
+        # Approval before a consequential action (§5.4): a submit /
+        # apply / confirm click on a task that requires approval
+        # needs a valid grant. Without one, the task asks the user
+        # (the approval card) and the step does not execute. The
+        # grant is consumed here — one approval, one submit — and
+        # only a grant scoped to this element/role can be spent.
+        if _is_consequential(action, elements) and _requires_approval(task):
+            if not _consume_approval(
+                conn, task_id,
+                element_id=action.get("element_id"),
+                role_id=role_ctx["role_id"],
+            ):
+                _set_task_status(conn, task_id, "ask_user")
+                _audit(conn, task_id, "task.approval_needed",
+                       {"step": n, "action": action.get("action"),
+                        "element_id": action.get("element_id")})
+                raise ValueError(
+                    f"step {n} needs approval before submit"
+                    " (POST /tasks/{id}/approve with an approval_id)"
+                )
+            _audit(conn, task_id, "task.approval_consumed", {"step": n})
         # Valid: record the step as executing and return the action.
+        # The executor needs more than the action: the element's
+        # info (the fingerprint), the allowed sites and the task id
+        # (the live path had none of these, so the fingerprint
+        # check was dead and every submit was refused).
         now = int(time.time())
         conn.execute(
             "UPDATE steps SET action_json = ?, element_id = ?, status = 'executing',"
@@ -444,10 +598,16 @@ def execute_step(
         _audit(conn, task_id, "task.execute",
                {"step": n, "action": action.get("action"),
                 "element_id": action.get("element_id"), "model": model})
+        target = next(
+            (e for e in elements if e.get("id") == action.get("element_id")), None
+        )
         return {
             "action": action,
             "expected_end_state": plan_step.get("expected_end_state", ""),
             "model": model,
+            "task_id": task_id,
+            "element": target,
+            "allowed_sites": _allowed_sites(task.get("constraints") or ""),
         }
     # 3 failed planner calls: two failed groundings in a row → ask user.
     conn.execute(
@@ -574,6 +734,49 @@ def verify_step(
     if not verified and url and previous_url and url != previous_url:
         verified, reason = True, f"URL changed to {url}"
     if verified:
+        # A verified submit records its receipt HERE (§6.9) — the
+        # loop, not an external POST, is what makes "already
+        # applied" durable. The role comes from the task
+        # constraints; without a role there is nothing to record
+        # (the login flow). The confirmation is the end-state
+        # text, redacted before it is stored.
+        if action.get("action") == "click":
+            task_row = conn.execute(
+                "SELECT constraints FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            role_ctx = _role_from_constraints(
+                (task_row["constraints"] or "") if task_row else ""
+            )
+            if role_ctx["role_id"] or role_ctx["url"]:
+                from ..jobs import applied as _applied
+                from ..jobs import receipts as _receipts
+                from ..planner import scan as _scan
+
+                confirmation, _hits = _scan.redact(
+                    f"{expected} — {reason} ({url or ''})"
+                )
+                step_row = conn.execute(
+                    "SELECT element_id FROM steps WHERE task_id = ? AND n = ?",
+                    (task_id, n),
+                ).fetchone()
+                el = (step_row["element_id"] if step_row else None) or ""
+                acted_el = next(
+                    (e for e in (new_observation or {}).get("elements", [])
+                     if e.get("id") == el), None
+                )
+                _receipts.record_receipt(
+                    conn, task_id,
+                    role_ctx["role_id"] or role_ctx["url"] or "",
+                    acted_el.get("name", "") if acted_el else "",
+                    "", role_ctx["url"] or url or "",
+                    confirmation, status="submitted",
+                )
+                _applied.mark_applied(
+                    conn, role_ctx["role_id"] or role_ctx["url"] or "",
+                    role_ctx["url"] or url or None,
+                )
+                _audit(conn, task_id, "task.receipt",
+                       {"step": n, "role_id": role_ctx["role_id"]})
         return _mark_done(conn, task_id, n, reason)
     # Not verified: retry up to 3 times, then fail the step.
     retries = int(step.get("retries") or 0) + 1

@@ -189,18 +189,25 @@ export interface WalkOptions {
 /** Walk the page and return every visible element with its role,
  *  accessible name, text and rect, plus the id → DOM node map the
  *  executor uses to resolve a planner action to a real element.
- *  Sensitive values are never recorded. */
+ *  Sensitive values are never recorded. Returns `truncated: true`
+ *  when the 2000-element cap cut the walk short — the planner must
+ *  know the observation is incomplete (it is not a full page). */
 function walkInternal(doc: Document, opts: WalkOptions = {}): {
   info: ElementInfo[];
   nodes: Map<string, Element>;
+  truncated: boolean;
 } {
   const maxElements = opts.maxElements ?? 2000;
   const out: ElementInfo[] = [];
   const nodes = new Map<string, Element>();
   const all = doc.querySelectorAll("*");
   let n = 0;
+  let truncated = false;
   for (const el of Array.from(all)) {
-    if (out.length >= maxElements) break;
+    if (out.length >= maxElements) {
+      truncated = true;
+      break;
+    }
     const tag = el.tagName.toLowerCase();
     if (tag === "script" || tag === "style" || tag === "head" || tag === "meta" || tag === "link") {
       continue;
@@ -267,13 +274,18 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
       text: nameText && textVal === nameText ? "" : textVal,
       value,
       sensitive,
+      // The server's consequential-action check needs the type
+      // and the form membership (a type=submit button, or any
+      // button inside a form, is a submit).
+      type: type || undefined,
+      inForm: el.closest("form") !== null,
       rect,
       visible: !isHiddenInput,
       interactable,
     });
     nodes.set(id, el);
   }
-  return { info: out, nodes };
+  return { info: out, nodes, truncated };
 }
 
 export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
@@ -286,6 +298,7 @@ export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
 export function walkDomWithNodes(doc: Document, opts: WalkOptions = {}): {
   info: ElementInfo[];
   nodes: Map<string, Element>;
+  truncated: boolean;
 } {
   return walkInternal(doc, opts);
 }

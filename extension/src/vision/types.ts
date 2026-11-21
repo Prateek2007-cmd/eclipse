@@ -24,6 +24,14 @@ export interface ElementInfo {
   value?: string;
   /** True for password / OTP / CVV fields: value is never recorded. */
   sensitive: boolean;
+  /** The element's `type` attribute (button / input), lowercased —
+   *  the server's consequential-action check needs it (a
+   *  type=submit button is a submit even when its name says
+   *  nothing). */
+  type?: string;
+  /** True when the element sits inside a <form> — a button in a
+   *  form submits it, even a type="button" "Continue". */
+  inForm?: boolean;
   rect: { x: number; y: number; width: number; height: number };
   visible: boolean;
   interactable: boolean;

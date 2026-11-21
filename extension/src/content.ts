@@ -12,7 +12,7 @@
  */
 import { executeAction, type ExecutorAction, type ExecuteOptions } from "./executor.js";
 import { walkDom, walkDomWithNodes } from "./vision/dom-walker.js";
-import type { Box } from "./vision/types.js";
+import type { Box, ElementInfo } from "./vision/types.js";
 
 function paintOverlay(boxes: Box[]): void {
   for (const box of boxes) {
@@ -42,7 +42,7 @@ chrome.runtime.onMessage.addListener(
       type: string;
       boxes?: Box[];
       action?: ExecutorAction;
-      options?: ExecuteOptions;
+      options?: ExecuteOptions & { expected?: ElementInfo; fill?: Record<string, string> };
     },
     _sender,
     sendResponse,
@@ -58,15 +58,29 @@ chrome.runtime.onMessage.addListener(
     if (msg.type === "execute" && msg.action) {
       (async () => {
         try {
-          // Re-walk fresh, and hand the executor the element info
-          // from THIS walk as the fingerprint: the resolved node
-          // must still match what the planner saw.
+          // Re-walk fresh for the node map, but the fingerprint
+          // comes from the OBSERVATION the planner saw — the
+          // element info the server sent in msg.options.expected.
+          // Using this walk's own info as the fingerprint compares
+          // the node against itself and can never fire, so a stale
+          // synthetic id would silently retarget the action. Only
+          // when the caller supplied no expected info (an old
+          // caller) do we fall back to this walk's info.
           const { info, nodes } = walkDomWithNodes(document);
-          const expected = info.find((e) => e.id === msg.action!.element_id);
+          const fresh = info.find((e) => e.id === msg.action!.element_id);
           const options: ExecuteOptions = {
             ...(msg.options ?? {}),
-            ...(expected ? { expected } : {}),
+            expected: msg.options?.expected ?? fresh,
           };
+          // The vault fill is a plain map over the message (a
+          // function cannot cross chrome.runtime.sendMessage);
+          // build the fill function from it here. Sprint 5 wires
+          // the vault into the background script, which will send
+          // this map.
+          const fillMap = (msg.options as { fill?: Record<string, string> } | undefined)?.fill;
+          if (fillMap && !options.fill) {
+            options.fill = (token: string) => fillMap[token];
+          }
           const result = await executeAction(msg.action!, document, nodes, options);
           sendResponse(result);
         } catch (err) {

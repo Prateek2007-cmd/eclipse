@@ -80,10 +80,16 @@ function isPlaceholder(text: string): boolean {
   return /^\[[A-Z0-9_]+\]$/.test(text.trim());
 }
 
-/** A URL with the query string and fragment stripped. */
+/** A URL with the query string and fragment stripped. Non-http(s)
+ *  URLs (about:blank, chrome://…) are returned as-is — their
+ *  origin is the literal "null", so concatenating origin +
+ *  pathname would produce nonsense ("nullblank"). */
 function safeUrl(raw: string): string {
   try {
     const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return raw.split("?")[0].split("#")[0];
+    }
     return `${u.origin}${u.pathname}`;
   } catch {
     return raw.split("?")[0].split("#")[0];
@@ -181,17 +187,20 @@ export async function executeAction(
     }
     // Real browsers navigate here. Linkedom test runtimes have no
     // navigation; the result still reports the target URL.
+    // The detail uses the stripped URL too — the raw URL can carry
+    // a sensitive query string (a reset token, an email).
     try {
       const win = doc.defaultView as unknown as { location?: { href: string } } | null;
       if (win?.location) win.location.href = url;
     } catch {
       // Non-browser runtime: report the target, do not fail.
     }
-    return { ok: true, detail: `navigating to ${url}`, url: safeUrl(url) };
+    return { ok: true, detail: `navigating to ${safeUrl(url)}`, url: safeUrl(url) };
   }
 
   if (action.action === "wait") {
-    const secs = Math.min(Math.max(action.seconds ?? 1, 1), 30);
+    const raw = Number(action.seconds);
+    const secs = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 30) : 1;
     await new Promise((r) => setTimeout(r, secs * 1000));
     return { ok: true, detail: `waited ${secs}s`, url: pageUrl };
   }
@@ -248,15 +257,23 @@ export async function executeAction(
       return { ok: false, detail: "file input is human-only", url: pageUrl };
     }
     // A click on a link navigates: the href must pass the same
-    // allow-list as navigate.
+    // allow-list as navigate. A javascript: (or data:, or any
+    // non-http(s)) href is refused outright — clicking it would
+    // evaluate page text as code.
     if (tag === "a") {
       const href = (node as HTMLAnchorElement).getAttribute("href");
       if (href && !href.startsWith("#")) {
         let targetHost = "";
+        let protocol = "";
         try {
-          targetHost = new URL(href, doc.URL).hostname.toLowerCase();
+          const parsed = new URL(href, doc.URL);
+          targetHost = parsed.hostname.toLowerCase();
+          protocol = parsed.protocol.toLowerCase();
         } catch {
           targetHost = "";
+        }
+        if (protocol && protocol !== "http:" && protocol !== "https:") {
+          return { ok: false, detail: `refused: link uses ${protocol} (not http(s))`, url: pageUrl };
         }
         if (targetHost && !hostAllowed(targetHost, opts.allowedSites, currentHost)) {
           return { ok: false, detail: `link to ${targetHost} is outside the allowed sites`, url: pageUrl };
@@ -267,9 +284,14 @@ export async function executeAction(
     // falls back to the spec default): a <button> with a missing or
     // invalid type attribute defaults to "submit" when in a form,
     // and getAttribute returns "" for it. <input type="image">
-    // also submits.
+    // also submits. And ANY button inside a form submits it — a
+    // type="button" "Continue" in a multi-step form is a submit
+    // (the common job-site pattern), even though its type says
+    // "button". A type="button" button NOT in a form (an "Apply
+    // now" that only opens the form) is not a submit.
+    const inForm = node.closest("form") !== null;
     const isSubmit =
-      (tag === "button" && buttonType(node) === "submit") ||
+      (tag === "button" && (buttonType(node) === "submit" || inForm)) ||
       (tag === "input" && (type === "submit" || type === "image"));
     if (isSubmit) {
       // No taskId → no guard key → refuse the submit. Two different
@@ -314,6 +336,44 @@ export async function executeAction(
       value = value.replaceAll(token, filled);
     }
     const input = node as HTMLInputElement | HTMLTextAreaElement;
+    // A contenteditable element has no .value setter — the
+    // HTMLInputElement setter throws illegal-invocation when
+    // `this` is a div in a real browser, and in linkedom it sets
+    // a useless `value` property. Set the text content and
+    // dispatch beforeinput + input with the data, which is what
+    // editors (and React) listen for.
+    if (contentEditable) {
+      node.textContent = value;
+      const win = doc.defaultView as unknown as {
+        Event?: new (type: string, init?: { bubbles: boolean }) => Event;
+        InputEvent?: new (
+          type: string,
+          init?: { bubbles: boolean; inputType?: string; data?: string },
+        ) => Event;
+      } | null;
+      for (const [typeName, inputType] of [
+        ["beforeinput", "insertText"],
+        ["input", "insertText"],
+      ] as const) {
+        let event: Event | null = null;
+        try {
+          event = win?.InputEvent
+            ? new win.InputEvent(typeName, { bubbles: true, inputType, data: value })
+            : null;
+        } catch {
+          event = null;
+        }
+        if (!event && win?.Event) {
+          event = new win.Event(typeName, { bubbles: true });
+          (event as Event & { data?: string }).data = value;
+        }
+        if (event) node.dispatchEvent(event);
+      }
+      if (win?.Event) {
+        node.dispatchEvent(new win.Event("change", { bubbles: true }));
+      }
+      return { ok: true, detail: `typed into ${elId}`, url: pageUrl };
+    }
     (input as HTMLElement).focus?.();
     // Use the native setter so frameworks (React) see the change.
     const proto = tag === "textarea"
@@ -348,9 +408,11 @@ export async function executeAction(
     }
     // selectedIndex works in browsers and in linkedom (where
     // select.value is getter-only and option.selected does not stick).
+    // The detail names only the element — the option label can
+    // carry PII, and it must not flow into the server/audit log.
     select.selectedIndex = idx;
     dispatch(node, "change");
-    return { ok: true, detail: `selected ${(options[idx].textContent ?? "").trim()} in ${elId}`, url: pageUrl };
+    return { ok: true, detail: `selected an option in ${elId}`, url: pageUrl };
   }
 
   if (action.action === "scroll") {
