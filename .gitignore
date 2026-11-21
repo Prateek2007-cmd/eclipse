@@ -1,0 +1,10 @@
+# Eclipse local-only files — never committed
+data/*
+!data/.gitkeep
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+evals/sih-benchmark/results/
+*.egg-info/
+.DS_Store

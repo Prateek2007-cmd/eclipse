@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Scanned document — no DOM text</title></head>
+<body>
+  <h1>Scanned document</h1>
+  <p>This page has no DOM text for the document itself. The form below
+     exists only as a scanned image. Vision (detection + OCR) must read
+     it. DOM scores zero by design.</p>
+  <img id="el_scanned_image" src="scanned-form.png"
+       alt="Scanned application form" width="800" height="1000">
+  <!-- Expected end state: OCR reads Name, Email, Phone and Roll from
+       the image. Nothing about the form is available in the DOM. -->
+</body>
+</html>

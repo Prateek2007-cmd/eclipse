@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TestResults — Application status</title></head>
+<body>
+  <h1>Application status</h1>
+  <p>Application for SDE Intern at Acme Tech.</p>
+  <p>Status: <strong id="el_result_status">Not selected</strong></p>
+  <p>Last updated: <span id="el_result_updated">2026-11-20</span></p>
+  <p id="el_result_note">Results are updated every morning at 9:00 AM.</p>
+  <!-- Watch fixture: the watched value is el_result_status.
+       A change from "Not selected" to "Selected" must fire the watch.
+       The value is checked again on the next tick before alerting
+       (two-tick confirmation). -->
+</body>
+</html>

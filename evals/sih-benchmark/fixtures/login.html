@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TestPortal — Sign in</title></head>
+<body>
+  <h1>Sign in to TestPortal</h1>
+  <form id="el_login_form" action="/dashboard" method="post">
+    <label for="el_login_email">Email</label>
+    <input id="el_login_email" name="email" type="email"
+           value="test.user@example.com" autocomplete="username">
+    <label for="el_login_password">Password</label>
+    <!-- Synthetic test credential only — never a real password. -->
+    <input id="el_login_password" name="password" type="password"
+           value="TestPass123!" autocomplete="current-password">
+    <button id="el_login_submit" type="submit">Sign in</button>
+  </form>
+  <a id="el_login_forgot" href="/forgot">Forgot password?</a>
+  <!-- Expected end state after a correct run: dashboard greeting
+       "Welcome back, Test User" is visible. -->
+</body>
+</html>

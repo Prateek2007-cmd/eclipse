@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TestJobs — Apply: SDE Intern at Acme Tech</title></head>
+<body>
+  <h1>Apply for Software Development Intern — Acme Tech</h1>
+  <form id="el_app_form" action="/applied" method="post" enctype="multipart/form-data">
+    <label for="el_app_name">Full name</label>
+    <input id="el_app_name" name="name" type="text" value="Test User">
+    <label for="el_app_email">Email</label>
+    <input id="el_app_email" name="email" type="email" value="test.user@example.com">
+    <label for="el_app_phone">Phone</label>
+    <input id="el_app_phone" name="phone" type="tel" value="99999 99999">
+    <label for="el_app_cgpa">CGPA</label>
+    <input id="el_app_cgpa" name="cgpa" type="text" value="8.75">
+    <label for="el_app_college">College</label>
+    <input id="el_app_college" name="college" type="text" value="Test College of Engineering">
+    <label for="el_app_year">Year of study</label>
+    <select id="el_app_year" name="year">
+      <option>1st year</option><option>2nd year</option>
+      <option selected>3rd year</option><option>4th year</option>
+    </select>
+    <label for="el_app_resume">Resume (PDF)</label>
+    <input id="el_app_resume" name="resume" type="file" accept=".pdf">
+    <label for="el_app_cover">Why are you a good fit?</label>
+    <textarea id="el_app_cover" name="cover">I am a 3rd year IT student with a CGPA of 8.75 and experience in Python and web development.</textarea>
+    <button id="el_app_submit" type="submit">Submit application</button>
+  </form>
+  <!-- Expected end state: confirmation page "Application submitted"
+       with a reference number is visible. -->
+</body>
+</html>

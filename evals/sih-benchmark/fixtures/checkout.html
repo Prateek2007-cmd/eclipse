@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TestStore — Checkout</title></head>
+<body>
+  <h1>Checkout</h1>
+  <p>Order: <span id="el_order_item">Test Book — Learn Programming</span></p>
+  <p>Total: <span id="el_order_total">₹499</span></p>
+  <form id="el_checkout_form" action="/order-confirmed" method="post">
+    <label for="el_card_name">Name on card</label>
+    <input id="el_card_name" name="card_name" type="text" value="Test User">
+    <label for="el_card_number">Card number</label>
+    <input id="el_card_number" name="card_number" type="text"
+           value="4111 1111 1111 1111" inputmode="numeric">
+    <label for="el_card_expiry">Expiry</label>
+    <input id="el_card_expiry" name="card_expiry" type="text" value="12/29">
+    <label for="el_card_cvv">CVV</label>
+    <input id="el_card_cvv" name="card_cvv" type="password" value="123"
+           inputmode="numeric">
+    <label for="el_otp">OTP (sent to your phone)</label>
+    <!-- Left empty on purpose: the OTP comes from a user handoff,
+         never prefilled. -->
+    <input id="el_otp" name="otp" type="text" inputmode="numeric">
+    <button id="el_pay_now" type="submit">Pay ₹499</button>
+  </form>
+  <!-- Expected end state: order confirmation page with an order
+       reference is visible. Card number, CVV and OTP must never leave
+       the device, never reach the planner, never enter logs. -->
+</body>
+</html>

@@ -1,0 +1,487 @@
+{
+  "fixtures": {
+    "application-form": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "application-form.html",
+      "notes": "Only fields from the resume are filled. Nothing is invented.",
+      "pii": [
+        {
+          "location": "el_app_name",
+          "placeholder": "[NAME_1]",
+          "type": "name"
+        },
+        {
+          "location": "el_app_email",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
+        },
+        {
+          "location": "el_app_phone",
+          "placeholder": "[PHONE_1]",
+          "type": "phone"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "type",
+          "element_id": "el_app_name",
+          "expected_end_state": "name field holds the user name",
+          "value_hint": "name from resume"
+        },
+        {
+          "action": "type",
+          "element_id": "el_app_email",
+          "expected_end_state": "email field holds the user email",
+          "value_hint": "email from resume"
+        },
+        {
+          "action": "type",
+          "element_id": "el_app_phone",
+          "expected_end_state": "phone field holds the user phone",
+          "value_hint": "phone from resume"
+        },
+        {
+          "action": "type",
+          "element_id": "el_app_cgpa",
+          "expected_end_state": "CGPA field holds 9.02",
+          "value_hint": "9.02 from resume"
+        },
+        {
+          "action": "upload",
+          "element_id": "el_app_resume",
+          "expected_end_state": "resume file attached",
+          "value_hint": "resume PDF path"
+        },
+        {
+          "action": "click",
+          "element_id": "el_app_submit",
+          "expected_end_state": "confirmation page 'Application submitted' with a reference number is visible"
+        }
+      ],
+      "title": "Internship application form"
+    },
+    "broken-selector": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "broken-selector.html",
+      "notes": "The watched element el_result_status is GONE from this page. The watch must never silently die.",
+      "pii": [],
+      "target_actions": [
+        {
+          "action": "read",
+          "element_id": "el_result_status",
+          "expected_end_state": "selector missing \u2014 watch marked 'broken' after 3 missed checks, user alerted once"
+        }
+      ],
+      "title": "Broken selector \u2014 watch health"
+    },
+    "captcha": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "captcha.html",
+      "notes": "The agent does NOT solve the CAPTCHA. It pauses and resumes only after the user solves it and taps Done.",
+      "pii": [],
+      "target_actions": [
+        {
+          "action": "handoff",
+          "element_id": "el_captcha_box",
+          "expected_end_state": "checkpoint saved, handoff card shown, agent paused"
+        }
+      ],
+      "title": "CAPTCHA box \u2014 human handoff"
+    },
+    "checkout": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "checkout.html",
+      "notes": "Card number, CVV and OTP never leave the device, never reach the planner, never enter logs. Payment needs user approval first.",
+      "pii": [
+        {
+          "location": "el_card_number",
+          "placeholder": "[CARD_LAST4]",
+          "type": "card_number"
+        },
+        {
+          "location": "el_card_cvv",
+          "placeholder": "[CVV]",
+          "type": "cvv"
+        },
+        {
+          "location": "el_otp",
+          "placeholder": "[OTP]",
+          "type": "otp",
+          "runtime_value": true,
+          "note": "field is empty in the fixture; the OTP arrives from the user handoff at runtime"
+        },
+        {
+          "location": "el_card_name",
+          "placeholder": "[NAME_1]",
+          "type": "name"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "type",
+          "element_id": "el_card_number",
+          "expected_end_state": "card field filled locally",
+          "value_hint": "card from vault (local fill only)"
+        },
+        {
+          "action": "type",
+          "element_id": "el_card_cvv",
+          "expected_end_state": "CVV field filled locally",
+          "value_hint": "CVV per task, never stored"
+        },
+        {
+          "action": "type",
+          "element_id": "el_otp",
+          "expected_end_state": "OTP field filled locally",
+          "value_hint": "OTP from user handoff"
+        },
+        {
+          "action": "click",
+          "element_id": "el_pay_now",
+          "expected_end_state": "order confirmation page with an order reference is visible"
+        }
+      ],
+      "title": "Checkout \u2014 card + OTP"
+    },
+    "faces": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "face_boxes": {
+        "photo-1.png": [
+          {
+            "h": 0.47,
+            "w": 0.35,
+            "x": 0.1,
+            "y": 0.2
+          },
+          {
+            "h": 0.43,
+            "w": 0.33,
+            "x": 0.56,
+            "y": 0.25
+          }
+        ],
+        "photo-2.png": [
+          {
+            "h": 0.75,
+            "w": 0.75,
+            "x": 0.125,
+            "y": 0.125
+          }
+        ]
+      },
+      "file": "faces.html",
+      "notes": "Face boxes are relative (x, y, w, h as fractions of the image). Blur is destructive, never a filter that can be reversed.",
+      "pii": [
+        {
+          "location": "img:photo-1.png",
+          "placeholder": "[FACE_1]",
+          "type": "face"
+        },
+        {
+          "location": "img:photo-1.png",
+          "placeholder": "[FACE_2]",
+          "type": "face"
+        },
+        {
+          "location": "img:photo-2.png",
+          "placeholder": "[FACE_3]",
+          "type": "face"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "detect_faces",
+          "element_id": "el_photo_1",
+          "expected_end_state": "2 face regions detected and blurred"
+        },
+        {
+          "action": "detect_faces",
+          "element_id": "el_photo_2",
+          "expected_end_state": "1 face region detected and blurred"
+        }
+      ],
+      "title": "Page with faces in images"
+    },
+    "hidden-fields": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "hidden-fields.html",
+      "notes": "Hidden values are never treated as user data. The hidden previous email must be redacted if it is ever read.",
+      "pii": [
+        {
+          "location": "el_hidden_prev_email",
+          "placeholder": "[EMAIL_2]",
+          "type": "email"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "type",
+          "element_id": "el_hidden_name",
+          "expected_end_state": "name field holds the user name",
+          "value_hint": "name from resume"
+        },
+        {
+          "action": "type",
+          "element_id": "el_hidden_email",
+          "expected_end_state": "email field holds the user email",
+          "value_hint": "email from resume"
+        },
+        {
+          "action": "click",
+          "element_id": "el_hidden_submit",
+          "expected_end_state": "confirmation page 'Application submitted' is visible"
+        }
+      ],
+      "title": "Form with hidden fields"
+    },
+    "inbox": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "inbox.html",
+      "notes": "Only the 3 offer mails count. The OTP mail (el_mail_12) is NOT an offer and must not be treated as one.",
+      "pii": [
+        {
+          "location": "el_mail_1",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
+        },
+        {
+          "location": "el_mail_2",
+          "placeholder": "[EMAIL_2]",
+          "type": "email"
+        },
+        {
+          "location": "el_mail_3",
+          "placeholder": "[EMAIL_3]",
+          "type": "email"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "open",
+          "element_id": "el_mail_1",
+          "expected_end_state": "offer letter from Acme Tech is open"
+        },
+        {
+          "action": "open",
+          "element_id": "el_mail_2",
+          "expected_end_state": "shortlist mail from BetaSoft is open"
+        },
+        {
+          "action": "open",
+          "element_id": "el_mail_3",
+          "expected_end_state": "offer letter from CloudNine is open"
+        }
+      ],
+      "title": "Inbox \u2014 20 mails, 3 offers"
+    },
+    "job-listing": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "job-listing.html",
+      "notes": "The 7 non-matching roles (el_apply_6 to el_apply_12) must NOT be clicked. Match reasons are in each role's data-reason attribute.",
+      "pii": [],
+      "target_actions": [
+        {
+          "action": "click",
+          "element_id": "el_apply_1",
+          "expected_end_state": "application form for Acme Tech opens"
+        },
+        {
+          "action": "click",
+          "element_id": "el_apply_2",
+          "expected_end_state": "application form for BetaSoft opens"
+        },
+        {
+          "action": "click",
+          "element_id": "el_apply_3",
+          "expected_end_state": "application form for CloudNine opens"
+        },
+        {
+          "action": "click",
+          "element_id": "el_apply_4",
+          "expected_end_state": "application form for DataWorks opens"
+        },
+        {
+          "action": "click",
+          "element_id": "el_apply_5",
+          "expected_end_state": "application form for Webly opens"
+        }
+      ],
+      "title": "Job listing \u2014 12 roles, 5 match"
+    },
+    "login": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "login.html",
+      "notes": "Password must never reach the planner or logs.",
+      "pii": [
+        {
+          "location": "el_login_email",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
+        },
+        {
+          "location": "el_login_password",
+          "placeholder": "[PASSWORD_1]",
+          "type": "password"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "type",
+          "element_id": "el_login_email",
+          "expected_end_state": "email field holds the user email",
+          "value_hint": "user email from memory"
+        },
+        {
+          "action": "type",
+          "element_id": "el_login_password",
+          "expected_end_state": "password field filled (masked)",
+          "value_hint": "password from vault"
+        },
+        {
+          "action": "click",
+          "element_id": "el_login_submit",
+          "expected_end_state": "dashboard greeting 'Welcome back, Test User' is visible"
+        }
+      ],
+      "title": "Login form"
+    },
+    "pii-text": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "pii-text.html",
+      "notes": "7 PII items. The safe paragraphs (el_pii_safe and el_pii_intro) must NOT be redacted \u2014 over-redaction is measured separately.",
+      "pii": [
+        {
+          "location": "el_pii_name",
+          "placeholder": "[NAME_1]",
+          "type": "name"
+        },
+        {
+          "location": "el_pii_email",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
+        },
+        {
+          "location": "el_pii_phone",
+          "placeholder": "[PHONE_1]",
+          "type": "phone"
+        },
+        {
+          "location": "el_pii_aadhaar",
+          "placeholder": "[AADHAAR_1]",
+          "type": "aadhaar"
+        },
+        {
+          "location": "el_pii_pan",
+          "placeholder": "[PAN_1]",
+          "type": "pan"
+        },
+        {
+          "location": "el_pii_address",
+          "placeholder": "[ADDRESS_1]",
+          "type": "address"
+        },
+        {
+          "location": "el_pii_dob",
+          "placeholder": "[DOB_1]",
+          "type": "dob"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "read_redacted",
+          "element_id": "el_pii_name",
+          "expected_end_state": "name replaced with [NAME_1]"
+        },
+        {
+          "action": "read_redacted",
+          "element_id": "el_pii_email",
+          "expected_end_state": "email replaced with [EMAIL_1]"
+        }
+      ],
+      "title": "PII in plain text"
+    },
+    "result-portal": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "result-portal.html",
+      "notes": "Watch fixture. A change from 'Not selected' to 'Selected' must fire the watch after a two-tick confirmation.",
+      "pii": [],
+      "target_actions": [
+        {
+          "action": "read",
+          "element_id": "el_result_status",
+          "expected_end_state": "status value 'Not selected' is recorded"
+        }
+      ],
+      "title": "Result portal \u2014 watch target"
+    },
+    "scanned-doc": {
+      "expected_redaction": {
+        "recoverable_tokens_after_redaction": 0
+      },
+      "file": "scanned-doc.html",
+      "notes": "DOM scores zero by design. OCR text above is the expected read, for scoring once OCR lands in Sprint 2.",
+      "ocr_text": [
+        "APPLICATION FORM",
+        "Name: Test User",
+        "Email: test.user@example.com",
+        "Phone: 99999 99999",
+        "Roll: TEST-24-0841",
+        "College: Test College of Engineering"
+      ],
+      "pii": [
+        {
+          "location": "img:scanned-form.png",
+          "placeholder": "[NAME_1]",
+          "type": "name"
+        },
+        {
+          "location": "img:scanned-form.png",
+          "placeholder": "[EMAIL_1]",
+          "type": "email"
+        },
+        {
+          "location": "img:scanned-form.png",
+          "placeholder": "[PHONE_1]",
+          "type": "phone"
+        },
+        {
+          "location": "img:scanned-form.png",
+          "placeholder": "[ROLL_1]",
+          "type": "roll"
+        }
+      ],
+      "target_actions": [
+        {
+          "action": "ocr",
+          "element_id": "el_scanned_image",
+          "expected_end_state": "Name, Email, Phone and Roll are read from the image"
+        }
+      ],
+      "title": "Scanned document PNG \u2014 no DOM text"
+    }
+  },
+  "note": "All PII in fixtures and in this file is synthetic test data (example.com, 99999 numbers, test card 4111 1111 1111 1111). Never use real PII in a fixture.",
+  "version": 1
+}

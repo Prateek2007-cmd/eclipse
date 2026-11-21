@@ -1,0 +1,4 @@
+# Eclipse server dependencies (Sprint 1).
+# Pinned to the versions verified live 2026-11-21 (Python 3.12).
+fastapi==0.165.0
+uvicorn[standard]==0.54.0

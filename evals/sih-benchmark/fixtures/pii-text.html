@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TestPage — Contact details</title></head>
+<body>
+  <h1>Contact the test team</h1>
+  <p id="el_pii_intro">For any questions, reach out to our test coordinator.</p>
+  <p id="el_pii_name">Name: Aarav Test</p>
+  <p id="el_pii_email">Email: aarav.test@example.com</p>
+  <p id="el_pii_phone">Phone: +91 99999 88888</p>
+  <p id="el_pii_aadhaar">Aadhaar: 9999 8888 7777 (synthetic test number)</p>
+  <p id="el_pii_pan">PAN: ABCDE1234F (synthetic test number)</p>
+  <p id="el_pii_address">Address: 12 Test Street, Hyderabad, Telangana 500001</p>
+  <p id="el_pii_dob">Date of birth: 01 Jan 2005</p>
+  <p id="el_pii_safe">Our office hours are 9 AM to 6 PM, Monday to Friday.
+     The next test workshop is on 2026-12-01.</p>
+  <!-- Expected end state: all 7 PII items above are detected and
+       replaced with placeholders; the safe paragraph is NOT redacted
+       (over-redaction is measured separately). -->
+</body>
+</html>
