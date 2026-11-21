@@ -4,15 +4,16 @@ Generated from real runs on 2026-11-21. Every number below was
 produced by a command in this repo, on the dates shown. No
 number here comes from a deck or from memory.
 
-## Gate (latest full run, 2026-11-21 ~15:1x IST)
+## Gate (latest full run, 2026-11-21 ~17:4x IST)
 
 | Suite | Result |
 |---|---|
-| Python unit + integration (`unittest discover -s tests`) | 235/235 |
+| Python unit + integration (`unittest discover -s tests`) | 237/237 |
 | Extension Node tests (`npm test`) | 62/62 |
 | Fixture harness (`run.py --runs 5`) | 60/60 |
 | Extension typecheck (`npm run typecheck`) | clean |
 | Extension build (`npm run build`) | clean |
+| Workspace build (`npm run build`) | clean |
 
 ## SIH benchmark (run 2026-11-21 ~14:19 IST, `results/benchmark-20261121-084924.json`)
 

@@ -17,18 +17,21 @@
   p strong, li strong { color: var(--text); }
   .tagline { font-size: 22px; color: var(--text); }
   .cta { display:inline-block; background:var(--accent); color:#1a0d05; font-weight:600; border-radius:8px; padding:12px 24px; text-decoration:none; margin-top:24px; }
-  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:24px; margin:16px 0; }
+  /* 60/30/10: links are text-coloured, never the browser default
+   * purple-blue — the only orange on the page is the CTA. */
+  a { color: var(--text); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:24px; margin:16px 0; }
   .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:16px; }
-  .metric { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .metric { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:20px; }
   .metric b { display:block; font-size:32px; font-family:Sora, sans-serif; color:var(--text); }
   .metric span { color:var(--muted); font-size:14px; }
-  .before, .after { font-family: monospace; font-size: 15px; background: var(--surface); border-radius: 8px; padding: 16px; overflow-x: auto; }
+  .before, .after { font-family: monospace; font-size: 15px; background: var(--bg); border-radius: 8px; padding: 16px; overflow-x: auto; }
   .before s { color: #f87171; }
   .after b { color: var(--green); }
   .skip-link { position:absolute; left:-9999px; top:0; background:var(--accent); color:#1a0d05; padding:8px 12px; border-radius:0 0 8px 0; z-index:100; }
   .skip-link:focus { left:0; }
   footer { color: var(--muted); font-size: 14px; margin-top: 64px; }
-  details { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 24px; margin:12px 0; }
+  details { background: var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 24px; margin:12px 0; }
   summary { cursor:pointer; font-weight:600; color:var(--text); }
 </style>
 </head>
@@ -63,7 +66,7 @@
   <div class="metric"><b>0</b><span>Recoverable tokens</span></div>
   <div class="metric"><b>26.7 MB</b><span>Extension models (≤300 MB)</span></div>
   <div class="metric"><b>0.001 s</b><span>Latency p50 (mock planner — loop overhead only)</span></div>
-  <div class="metric"><b>235/235</b><span>Python tests · 62/62 Node · 60/60 harness</span></div>
+  <div class="metric"><b>237/237</b><span>Python tests · 62/62 Node · 60/60 harness</span></div>
 </div>
 
 <h2>FAQ</h2>

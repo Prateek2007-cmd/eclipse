@@ -66,14 +66,17 @@ button, input, textarea, select {
 button {
   cursor: pointer;
   border: 1px solid var(--border);
-  background: var(--surface);
+  /* 60/30/10: panes are now --surface, so buttons sit one step
+   * lighter (--surface-hover) to read on both the pane and the
+   * page background. */
+  background: var(--surface-hover);
   border-radius: var(--radius-card);
   padding: var(--space-2) var(--space-3);
   /* Sprint 9 fix (review M20): plan §5.8 requires 150–250ms
    * ease-out for state changes. */
   transition: background-color 200ms ease-out, border-color 200ms ease-out, filter 200ms ease-out, opacity 200ms ease-out;
 }
-button:hover { background: var(--surface-hover); }
+button:hover { filter: brightness(1.15); }
 button:disabled { opacity: 0.5; cursor: default; }
 
 button.primary {

@@ -515,7 +515,7 @@ does not support.
 
 | Suite | Result (2026-11-21) |
 |---|---|
-| Python unit + integration | 235/235 |
+| Python unit + integration | 237/237 |
 | Extension Node tests | 62/62 |
 | Fixture harness (5 runs) | 60/60 |
 | Extension typecheck + build | clean |
@@ -715,5 +715,5 @@ not yet measured, this report says so.*
 | 9 | (this sprint) | Workspace + report + decks + docs | — |
 
 Every finding above has a regression test. The full gate after
-each fix pass was green before the push (Python 235/235, Node
+each fix pass was green before the push (Python 237/237, Node
 62/62, harness 60/60 at the latest run).

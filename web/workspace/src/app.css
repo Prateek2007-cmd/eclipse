@@ -9,7 +9,8 @@
   align-items: baseline;
   gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
-  background: var(--bg-raised);
+  /* 60/30/10: header band is the 30% second colour too. */
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
@@ -35,7 +36,11 @@
 }
 
 .pane {
-  background: var(--bg-raised);
+  /* 60/30/10 fix (user, 2026-11-21): panes used --bg-raised
+   * (#0B111C), nearly identical to --bg (#070B12), so the
+   * rendered page measured 94.4% near-black and 0.1% surface —
+   * the 30% second colour did not exist. Panes are the 30%. */
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   padding: var(--space-4);
@@ -125,7 +130,8 @@
   border-radius: var(--radius-card);
   padding: var(--space-3);
   margin-top: var(--space-3);
-  background: var(--surface);
+  /* 60/30/10: panes are now --surface, so the card goes darker. */
+  background: var(--bg-raised);
 }
 
 .approval-card h3 {
@@ -153,7 +159,9 @@
   gap: var(--space-2);
   align-items: baseline;
   padding: var(--space-2);
-  background: var(--surface);
+  /* 60/30/10: panes are now --surface, so rows go darker
+   * (--bg-raised) to read as inset rows. */
+  background: var(--bg-raised);
   border-radius: var(--radius-card);
   transition: border-color 200ms ease-out, background-color 200ms ease-out;
 }
@@ -177,7 +185,8 @@
   gap: var(--space-4);
   flex-wrap: wrap;
   padding: var(--space-3);
-  background: var(--surface);
+  /* 60/30/10: panes are now --surface, so the HUD goes darker. */
+  background: var(--bg-raised);
   border-radius: var(--radius-card);
   margin: var(--space-3) 0;
 }
@@ -227,7 +236,8 @@ th[scope="row"] {
   max-width: 560px;
   margin: var(--space-6) auto;
   padding: var(--space-4);
-  background: var(--bg-raised);
+  /* 60/30/10: the gate is a card, so it is the 30% colour. */
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
 }
@@ -244,7 +254,8 @@ th[scope="row"] {
   justify-content: space-between;
   gap: var(--space-4);
   padding: var(--space-2) var(--space-4);
-  background: var(--bg-raised);
+  /* 60/30/10: footer band is the 30% second colour too. */
+  background: var(--surface);
   border-top: 1px solid var(--border);
   flex-wrap: wrap;
 }
