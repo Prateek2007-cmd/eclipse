@@ -22,10 +22,11 @@ Dev: `npm run dev` (port 5173, /api proxy to 127.0.0.1:8000).
 
 **Known gaps:** execute/verify are not wired in the workspace —
 execution runs in the extension; the workspace is a monitoring +
-control surface. The workspace has not been screenshot-reviewed
-in a real browser (the cloud browser cannot reach this VM's
-localhost and outbound tunnels are blocked by the sandbox
-network policy).
+control surface. Screenshot-reviewed in a real browser on
+2026-11-21 ~17:1x IST (Playwright Chromium headless on this VM):
+all 4 panes render, metrics show real numbers, the plan timeline
+shows real step descriptions, the 3D scene renders via WebGL.
+Screenshots: `docs/screenshots/` (PNGs, regenerate after cloning).
 
 ## Proof page — `web/proof.html`
 

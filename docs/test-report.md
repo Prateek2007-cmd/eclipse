@@ -71,10 +71,14 @@ reported separately — they are not in the headline denominator.
   send card).
 - The extension WebCrypto vault is built and unit-tested but not
   wired into the fill path.
-- The workspace (Sprint 9) is built and served, and was NOT
-  screenshot-reviewed in a real browser — the cloud browser
-  cannot reach this VM's localhost and outbound tunnels are
-  blocked by the sandbox network policy. The Playwright
-  browser install (needs approval) is the path to it. Its 3D
-  scene renders only where WebGL is available, with a static
-  fallback otherwise.
+- The workspace (Sprint 9) is built and served, and WAS
+  screenshot-reviewed in a real browser on 2026-11-21 ~17:1x IST
+  (Playwright Chromium headless on this VM, against the live
+  server): all 4 panes render with no overlap or clipping,
+  metrics show real numbers, the plan timeline shows real step
+  descriptions, the Privacy Boundary 3D scene renders via
+  WebGL (no fallback needed), the Diff view renders. One
+  cosmetic console 404: GET /monitor/briefing/latest before
+  any briefing exists (handled in code, logged by the
+  browser). Screenshots: docs/screenshots/ (PNGs — regenerate
+  after cloning, snapshot push is text-only).
