@@ -8,3 +8,9 @@ __pycache__/
 evals/sih-benchmark/results/
 *.egg-info/
 .DS_Store
+# Extension: downloaded models and build output (see models/README.md)
+extension/models/*
+!extension/models/README.md
+extension/node_modules/
+extension/dist/
+extension/tests-dist/

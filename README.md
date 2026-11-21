@@ -66,8 +66,8 @@ re-observing → checkpoint + log.
 | Sprint | Scope | Grade |
 |---|---|---|
 | 0 | Start blocks: model probe, connector check, repo, resume, laptop spec, WebGPU | done, verified live 2026-11-21 |
-| 1 | Fixtures + harness + server skeleton | in progress (this commit) |
-| 2 | Vision + redaction + gate | not started |
+| 1 | Fixtures + harness + server skeleton | done — harness 60/60, unittests 12/12, metrics null (no loop yet) |
+| 2 | Vision + redaction + gate | done — Node 22/22, Python 20/20, harness 60/60; OCR 6/6 lines, BlazeFace 2+1 faces (ground truth); Florence-2 implemented but not live-verified (no WebGPU in sandbox) |
 | 3 | Planner + executor + verify | not started |
 | 4 | Job-hunt flow end to end | not started |
 | 5 | Vault + cold mail + checkout | not started |

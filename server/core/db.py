@@ -86,6 +86,10 @@ def migrate(db_path: Path | None = None) -> None:
         conn = connect(db_path)
         try:
             conn.executescript(SCHEMA)
+            # Sprint 2: facts gain a topic column (keyword memory).
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(facts)")}
+            if "topic" not in cols:
+                conn.execute("ALTER TABLE facts ADD COLUMN topic TEXT")
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

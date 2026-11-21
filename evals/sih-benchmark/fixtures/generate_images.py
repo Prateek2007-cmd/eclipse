@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
 
@@ -24,6 +24,15 @@ def scanned_form(path: Path) -> None:
     img = Image.new("RGB", (800, 1000), "white")
     dr = ImageDraw.Draw(img)
     dr.rectangle([40, 40, 760, 960], outline="black", width=3)
+    # PIL's default bitmap font is ~11px — too small for any OCR
+    # model to read reliably. Use a real TTF at 28px (DejaVu Sans
+    # ships on most Linux systems); fall back to the default font
+    # only when it is missing, so the script still runs anywhere.
+    try:
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+    except (OSError, IOError):
+        font = ImageFont.load_default()
     lines = ["APPLICATION FORM", "", "Name: Test User",
              "Email: test.user@example.com", "Phone: 99999 99999",
              "Roll: TEST-24-0841",
@@ -31,7 +40,7 @@ def scanned_form(path: Path) -> None:
              "Signature: _________________"]
     y = 90
     for line in lines:
-        dr.text((80, y), line, fill="black")
+        dr.text((80, y), line, fill="black", font=font)
         y += 70
     img.save(path)
 

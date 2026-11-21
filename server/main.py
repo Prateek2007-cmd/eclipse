@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import audit_api, system
+from .api import audit_api, memory_api, system
 from .core import config, db
 
 
@@ -35,14 +35,15 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
-    # Sprint 1 has only GET routes; widen when write routes land.
-    allow_methods=["GET"],
+    # Sprint 2 adds a POST route (memory facts); widen from GET-only.
+    allow_methods=["GET", "POST"],
     allow_headers=["X-Eclipse-Token", "Content-Type"],
     allow_credentials=False,
 )
 
 app.include_router(system.router)
 app.include_router(audit_api.router)
+app.include_router(memory_api.router)
 
 
 if __name__ == "__main__":
