@@ -12,14 +12,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parseHTML } from "linkedom";
 
-import { walkDom, resolveElement } from "../tests-dist/dom-walker.js";
-import { redactObservation, redactText, mergeBoxes } from "../tests-dist/redactor.js";
-import { groupIntoLines } from "../tests-dist/ocr.js";
-import { observe } from "../tests-dist/observe.js";
-import { secondScan } from "../tests-dist/second-scan.js";
-import { evaluateGate } from "../tests-dist/gate.js";
-import { checkEgress } from "../tests-dist/egress.js";
-import { findPatternPii, PlaceholderRegistry, classifyField } from "../tests-dist/pii.js";
+import { walkDom, resolveElement } from "../tests-dist/vision/dom-walker.js";
+import { redactObservation, redactText, mergeBoxes } from "../tests-dist/vision/redactor.js";
+import { groupIntoLines } from "../tests-dist/vision/ocr.js";
+import { observe } from "../tests-dist/vision/observe.js";
+import { secondScan } from "../tests-dist/vision/second-scan.js";
+import { evaluateGate } from "../tests-dist/vision/gate.js";
+import { checkEgress } from "../tests-dist/vision/egress.js";
+import { findPatternPii, PlaceholderRegistry, classifyField } from "../tests-dist/vision/pii.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const FIXTURES = join(ROOT, "evals", "sih-benchmark", "fixtures");

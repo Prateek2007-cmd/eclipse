@@ -217,8 +217,9 @@ def run(runs: int, out_dir: Path) -> tuple[dict, bool]:
                 "target": spec["target"],
                 "weight": spec["weight"],
                 "status": "not_measured",
-                "reason": "planner/executor not built yet (Sprints 3-4); "
-                          "no score until a real loop runs on fixtures",
+                "reason": "planner + executor built (Sprint 3); "
+                          "no score until a real loop runs on fixtures "
+                          "(Sprint 6 benchmark)",
             }
             for name, spec in METRIC_TARGETS.items()
         },
@@ -282,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{check['checks'].get('pii_count', 0)} PII labels")
         if not check["passed"]:
             print(f"        {check['checks']}")
-    print("SIH metrics: not measured (planner/executor not built yet)")
+    print("SIH metrics: not measured (no real loop run yet — Sprint 6 benchmark)")
     print(f"results: {results['out_path']}")
     return 0 if all_passed else 1
 

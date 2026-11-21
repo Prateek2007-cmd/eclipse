@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS tasks(
 CREATE TABLE IF NOT EXISTS steps(
   id TEXT PRIMARY KEY, task_id TEXT, n INTEGER, action_json TEXT,
   status TEXT, started_at INTEGER, ended_at INTEGER, ms INTEGER,
-  element_id TEXT, result TEXT, error TEXT);
+  element_id TEXT, result TEXT, error TEXT, retries INTEGER DEFAULT 0,
+  scan_blocks INTEGER DEFAULT 0, grounding_failures INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS checkpoints(
   id TEXT PRIMARY KEY, task_id TEXT, step_n INTEGER, summary TEXT,
   state_json TEXT, created_at INTEGER);
@@ -90,6 +91,17 @@ def migrate(db_path: Path | None = None) -> None:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(facts)")}
             if "topic" not in cols:
                 conn.execute("ALTER TABLE facts ADD COLUMN topic TEXT")
+            # Sprint 3: steps gain a retry counter (verify retries).
+            step_cols = {r[1] for r in conn.execute("PRAGMA table_info(steps)")}
+            if "retries" not in step_cols:
+                conn.execute("ALTER TABLE steps ADD COLUMN retries INTEGER DEFAULT 0")
+            # Sprint 3 fix: second-PII-scan blocks and grounding
+            # failures are tracked per step (the SCHEMA string
+            # declares them too, for fresh databases).
+            if "scan_blocks" not in step_cols:
+                conn.execute("ALTER TABLE steps ADD COLUMN scan_blocks INTEGER DEFAULT 0")
+            if "grounding_failures" not in step_cols:
+                conn.execute("ALTER TABLE steps ADD COLUMN grounding_failures INTEGER DEFAULT 0")
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

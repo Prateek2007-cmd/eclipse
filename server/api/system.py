@@ -35,7 +35,7 @@ def metrics() -> dict:
         "audit_entries": audit,
         "quota": [dict(row) for row in quota],
         "tokens": {"in": 0, "out": 0},
-        "note": "planner not built yet (Sprint 4); token counts are 0",
+        "note": "planner built (Sprint 3); token counts not wired yet — 0 until a live call is logged",
     }
 
 

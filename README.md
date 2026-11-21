@@ -68,7 +68,7 @@ re-observing → checkpoint + log.
 | 0 | Start blocks: model probe, connector check, repo, resume, laptop spec, WebGPU | done, verified live 2026-11-21 |
 | 1 | Fixtures + harness + server skeleton | done — harness 60/60, unittests 12/12, metrics null (no loop yet) |
 | 2 | Vision + redaction + gate | done — Node 22/22, Python 20/20, harness 60/60; OCR 6/6 lines, BlazeFace 2+1 faces (ground truth); Florence-2 implemented but not live-verified (no WebGPU in sandbox) |
-| 3 | Planner + executor + verify | not started |
+| 3 | Planner + executor + verify | done — Python 66/66, Node 39/39, harness 60/60; review BLOCK fixed (server PII scan, verify baseline diff, handoff resume, default-submit guard); planner is implemented and unit-tested with a mock planner but NOT live-verified against the real gateway (needs ANTSEED_API_KEY in the server env) |
 | 4 | Job-hunt flow end to end | not started |
 | 5 | Vault + cold mail + checkout | not started |
 | 6 | RAG + benchmark + proof views | not started |

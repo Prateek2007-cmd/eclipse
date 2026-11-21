@@ -16,9 +16,9 @@ import { dirname, join } from "node:path";
 import * as ort from "onnxruntime-node";
 import { PNG } from "pngjs";
 
-import { createYoloSession, parseYoloOutput } from "../tests-dist/yolo.js";
-import { createOcrSession } from "../tests-dist/ocr.js";
-import { createBlazeFaceSession } from "../tests-dist/blazeface.js";
+import { createYoloSession, parseYoloOutput } from "../tests-dist/vision/yolo.js";
+import { createOcrSession } from "../tests-dist/vision/ocr.js";
+import { createBlazeFaceSession } from "../tests-dist/vision/blazeface.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODELS = join(HERE, "..", "models");

@@ -187,10 +187,16 @@ export interface WalkOptions {
 }
 
 /** Walk the page and return every visible element with its role,
- *  accessible name, text and rect. Sensitive values are never recorded. */
-export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
+ *  accessible name, text and rect, plus the id → DOM node map the
+ *  executor uses to resolve a planner action to a real element.
+ *  Sensitive values are never recorded. */
+function walkInternal(doc: Document, opts: WalkOptions = {}): {
+  info: ElementInfo[];
+  nodes: Map<string, Element>;
+} {
   const maxElements = opts.maxElements ?? 2000;
   const out: ElementInfo[] = [];
+  const nodes = new Map<string, Element>();
   const all = doc.querySelectorAll("*");
   let n = 0;
   for (const el of Array.from(all)) {
@@ -200,8 +206,24 @@ export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
       continue;
     }
     if (isHidden(el)) continue;
-    const id = el.getAttribute("id")?.trim() || `el_${n}`;
-    n += 1;
+    // Ids must be unique and stable in one walk. A duplicate explicit
+    // id keeps the FIRST occurrence (matching resolveElement's
+    // first-wins); later duplicates get a synthetic id. And synthetic
+    // ids use a distinct prefix (eclipse_el_) so they can never
+    // collide with a page element's own id (a page with id="el_0"
+    // used to collide with the synthetic namespace).
+    let id = el.getAttribute("id")?.trim();
+    if (id && nodes.has(id)) {
+      id = undefined; // duplicate — fall through to a synthetic id
+    }
+    if (!id) {
+      do {
+        id = `eclipse_el_${n}`;
+        n += 1;
+      } while (nodes.has(id));
+    } else {
+      n += 1;
+    }
     const type = (el.getAttribute("type") ?? "").toLowerCase();
     const nameText = accessibleName(el, doc);
     const labelText = [
@@ -249,8 +271,37 @@ export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
       visible: !isHiddenInput,
       interactable,
     });
+    nodes.set(id, el);
   }
-  return out;
+  return { info: out, nodes };
+}
+
+export function walkDom(doc: Document, opts: WalkOptions = {}): ElementInfo[] {
+  return walkInternal(doc, opts).info;
+}
+
+/** Walk the page and return the element infos plus the id → DOM
+ *  node map. The executor resolves a planner action's element_id
+ *  through this map — never a guessed selector. */
+export function walkDomWithNodes(doc: Document, opts: WalkOptions = {}): {
+  info: ElementInfo[];
+  nodes: Map<string, Element>;
+} {
+  return walkInternal(doc, opts);
+}
+
+/** The accessible name of an element (same logic the walker uses).
+ *  Exported so the executor can fingerprint a resolved node: the
+ *  tag + accessible name must still match the observation's element
+ *  info, or the DOM moved between observe and execute and the
+ *  action is refused (positional synthetic ids go stale otherwise). */
+export function accessibleNameOf(el: Element, doc: Document): string {
+  return accessibleName(el, doc);
+}
+
+/** Whether the element is hidden (same check the walker uses). */
+export function isHiddenElement(el: Element): boolean {
+  return isHidden(el);
 }
 
 /** Find the element the planner's action should resolve to, by id.
