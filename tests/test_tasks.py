@@ -380,8 +380,12 @@ class TestTasksApi(unittest.TestCase):
         env["ECLIPSE_TOKEN"] = TOKEN
         # No planner keys, and Ollama pointed at a dead port: the
         # planner must fail closed (502), never hang or crash.
+        # ANTSEED_USE_SURROGATE=0 keeps the vault-held surrogate
+        # out of this server too — otherwise the plan call would go
+        # live instead of failing closed.
         env.pop("ANTSEED_API_KEY", None)
         env.pop("GROQ_API_KEY", None)
+        env["ANTSEED_USE_SURROGATE"] = "0"
         env["OLLAMA_BASE_URL"] = "http://127.0.0.1:1/v1"
         venv_python = REPO_ROOT / ".venv" / "bin" / "python"
         python = str(venv_python) if venv_python.exists() else sys.executable

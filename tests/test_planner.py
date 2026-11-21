@@ -4,9 +4,11 @@ calls are mocked with an injectable transport, so no API key and
 no live model are needed.
 """
 import json
+import os
 import sys
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -155,6 +157,136 @@ class TestRouter(unittest.TestCase):
         names = [e.name for e in chain]
         self.assertNotIn("orcarouter", names)
         self.assertIn("ollama", names)
+
+    def test_default_chain_uses_surrogate_without_env_key(self):
+        # Fix list item 1: with no ANTSEED_API_KEY in the env, the
+        # Antseed endpoint must still be in the chain, authenticating
+        # with the vault-held connector credential via the surrogate
+        # — never silently dropped, never a raw key.
+        saved = {k: os.environ.pop(k, None) for k in
+                 ("ANTSEED_API_KEY", "ANTSEED_BASE_URL", "ANTSEED_MODEL")}
+        try:
+            chain = router.default_chain()
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+        ep = next(e for e in chain if e.name == "antseed")
+        self.assertIsNone(ep.api_key)
+        self.assertTrue(ep.use_surrogate)
+        self.assertEqual(ep.surrogate_connector, "custom.akash-antseed")
+        self.assertEqual(ep.surrogate_hosts, ("akash-antseed.duckdns.org",))
+        self.assertEqual(ep.model, "google-gemma-4-31b-it")
+
+    def test_default_chain_uses_env_key_when_set(self):
+        saved = os.environ.get("ANTSEED_API_KEY")
+        os.environ["ANTSEED_API_KEY"] = "k-test"
+        try:
+            chain = router.default_chain()
+        finally:
+            if saved is None:
+                os.environ.pop("ANTSEED_API_KEY", None)
+            else:
+                os.environ["ANTSEED_API_KEY"] = saved
+        ep = next(e for e in chain if e.name == "antseed")
+        self.assertEqual(ep.api_key, "k-test")
+        self.assertFalse(ep.use_surrogate)
+
+    def test_surrogate_transport_attaches_surrogate(self):
+        # _real_transport with a surrogate must call the attach
+        # helper (which swaps in the vault key via authd) and must
+        # not put any raw key in the request headers.
+        seen: dict = {}
+
+        def fake_attach(request, connector, hosts):
+            seen["connector"] = connector
+            seen["hosts"] = hosts
+            seen["had_auth_header"] = request.get_header("Authorization") is not None
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"choices": [{"message": {"content": "ok"}}]}
+                ).encode()
+
+        orig_attach = router._attach_surrogate
+        orig_urlopen = urllib.request.urlopen
+        router._attach_surrogate = fake_attach
+        urllib.request.urlopen = lambda req, timeout: FakeResp()
+        try:
+            data = router._real_transport(
+                "https://akash-antseed.duckdns.org/v1/chat/completions",
+                {}, {"model": "m"}, 8.0,
+                surrogate=("custom.akash-antseed", ("akash-antseed.duckdns.org",)),
+            )
+        finally:
+            router._attach_surrogate = orig_attach
+            urllib.request.urlopen = orig_urlopen
+        self.assertEqual(seen["connector"], "custom.akash-antseed")
+        self.assertEqual(seen["hosts"], ("akash-antseed.duckdns.org",))
+        self.assertFalse(seen["had_auth_header"])
+        self.assertEqual(data["choices"][0]["message"]["content"], "ok")
+
+    def test_call_planner_uses_surrogate_endpoint(self):
+        # No injected transport: a surrogate endpoint must go
+        # through the surrogate transport, not the plain one.
+        seen: dict = {}
+
+        def fake_attach(request, connector, hosts):
+            seen["connector"] = connector
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {"choices": [{"message": {"content": '{"action": "wait", "seconds": 1, "reason": "x"}'}}]}
+                ).encode()
+
+        orig_attach = router._attach_surrogate
+        orig_urlopen = urllib.request.urlopen
+        router._attach_surrogate = fake_attach
+        urllib.request.urlopen = lambda req, timeout: FakeResp()
+        try:
+            ep = Endpoint(
+                name="antseed",
+                base_url="https://akash-antseed.duckdns.org/v1",
+                model="google-gemma-4-31b-it",
+                quota_model="google-gemma-4-31b-it",
+                use_surrogate=True,
+                surrogate_connector="custom.akash-antseed",
+                surrogate_hosts=("akash-antseed.duckdns.org",),
+            )
+            text, model, _ms = router.call_planner("do something", chain=[ep])
+        finally:
+            router._attach_surrogate = orig_attach
+            urllib.request.urlopen = orig_urlopen
+        self.assertEqual(seen.get("connector"), "custom.akash-antseed")
+        self.assertIn("wait", text)
+        self.assertTrue(model.startswith("antseed:"))
+
+    def test_planner_token_cap_covers_long_plans(self):
+        # Fix list item 1: the 400-token cap truncated 8-step plans
+        # mid-JSON in the first live benchmark run. The default
+        # max_tokens must leave headroom for a full plan.
+        seen: dict = {}
+
+        def transport(url, headers, payload, timeout):
+            seen["max_tokens"] = payload["max_tokens"]
+            return _ok_response('{"action": "wait", "seconds": 1, "reason": "x"}')
+
+        router.call_planner("do something", chain=self._chain(), transport=transport)
+        self.assertGreaterEqual(seen["max_tokens"], 800)
 
 
 class TestValidate(unittest.TestCase):

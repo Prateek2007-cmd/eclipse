@@ -16,14 +16,28 @@ empty response, the next model is tried at once. The model that
 answered is logged and its quota is incremented (Antseed free models
 only — the quota table tracks those; Groq/Ollama are untracked).
 Warn at 80% of the daily limit; stop cloud calls at 100%.
+
+Antseed auth (fix list item 1, 2026-11-21): the gateway key lives
+in the Secure Vault as the registered `custom.akash-antseed`
+connector credential — it is NEVER in an env var, a file, or a
+log. When ANTSEED_API_KEY is not set in the environment, the
+Antseed endpoint authenticates with the connector's surrogate:
+`dynamic_credentials.add_surrogate_to_request` attaches an
+`hsurr:` bearer token and authd swaps in the real key on the
+approved request to the registered host (the same mechanism the
+`antseed.py` CLI uses). The raw key is never visible to the
+server process.
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import os
+import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -32,8 +46,18 @@ from ..proof import record as _record_outbound
 
 logger = logging.getLogger("eclipse.planner")
 
-PLANNER_TIMEOUT_S = 8.0
-PLANNER_MAX_TOKENS = 400
+# 15s, not 8s: the second live benchmark run (2026-11-21) showed
+# plan calls timing out at ~8.8s once the token cap rose to 800 —
+# a multi-step plan generates far more tokens than a single action
+# and needs the extra time. Step calls still typically answer in
+# ~2.5s; the 15s is a ceiling, not a target.
+PLANNER_TIMEOUT_S = 15.0
+# 800, not 400: the first live benchmark run (2026-11-21) showed
+# gemma-4-31b over-generating 8-step plans that hit the 400-token
+# cap mid-JSON and failed to parse (2 of 5 plan calls). A step call
+# returns one short JSON action and uses far fewer tokens; the cap
+# only bites plan calls. 800 covers ~15 steps of plan output.
+PLANNER_MAX_TOKENS = 800
 PLANNER_TEMPERATURE = 0.2
 
 
@@ -52,6 +76,12 @@ class Endpoint:
     # The quota-table model id (Antseed free models only). None means
     # untracked (Groq, Ollama, OrcaRouter).
     quota_model: str | None = None
+    # Surrogate auth (fix list item 1): when True, authenticate with
+    # the registered connector credential instead of api_key. The raw
+    # key is never in the server process.
+    use_surrogate: bool = False
+    surrogate_connector: str | None = None
+    surrogate_hosts: tuple[str, ...] = ()
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -63,16 +93,42 @@ def default_chain() -> list[Endpoint]:
     """Build the fallback chain from the environment."""
     chain: list[Endpoint] = []
     antseed_key = _env("ANTSEED_API_KEY")
+    antseed_base = (
+        _env("ANTSEED_BASE_URL", "https://akash-antseed.duckdns.org/v1") or ""
+    )
+    antseed_model = _env("ANTSEED_MODEL", "google-gemma-4-31b-it") or ""
+    antseed_host = urllib.parse.urlparse(antseed_base).hostname or ""
     if antseed_key:
         chain.append(
             Endpoint(
                 name="antseed",
-                base_url=_env("ANTSEED_BASE_URL", "https://akash-antseed.duckdns.org/v1") or "",
-                model=_env("ANTSEED_MODEL", "google-gemma-4-31b-it") or "",
+                base_url=antseed_base,
+                model=antseed_model,
                 api_key=antseed_key,
-                quota_model=_env("ANTSEED_MODEL", "google-gemma-4-31b-it"),
+                quota_model=antseed_model,
             )
         )
+    else:
+        # No env key: authenticate with the vault-held connector
+        # credential via the surrogate (fix list item 1). The
+        # endpoint is always in the chain — a missing env var must
+        # not silently drop the live planner. ANTSEED_USE_SURROGATE=0
+        # disables this (planner-less server: plan calls fail closed
+        # with 502, as test_plan_fails_closed_without_a_planner
+        # verifies).
+        if _env("ANTSEED_USE_SURROGATE", "1") != "0":
+            chain.append(
+                Endpoint(
+                    name="antseed",
+                    base_url=antseed_base,
+                    model=antseed_model,
+                    api_key=None,
+                    quota_model=antseed_model,
+                    use_surrogate=True,
+                    surrogate_connector="custom.akash-antseed",
+                    surrogate_hosts=(antseed_host,) if antseed_host else (),
+                )
+            )
     orca_base = _env("ORCA_ROUTER_BASE_URL")
     orca_key = _env("ORCA_ROUTER_API_KEY")
     orca_model = _env("ORCA_ROUTER_MODEL")
@@ -109,13 +165,36 @@ def default_chain() -> list[Endpoint]:
     return chain
 
 
-def _real_transport(url: str, headers: dict[str, str], payload: dict, timeout: float) -> dict:
+def _attach_surrogate(request, connector: str, hosts: tuple[str, ...]) -> None:
+    """Attach the vault-held connector credential to a request.
+
+    Imports the bundled helper lazily so this module stays
+    importable where the helper is absent; the call fails loudly
+    only when the surrogate path is actually used. The helper
+    returns an `hsurr:` surrogate — authd swaps in the real key on
+    the approved request. The raw key never enters this process.
+    """
+    sys.path.insert(0, "/opt/muse/skills/custom-connector-setup/bin")
+    from dynamic_credentials import add_surrogate_to_request
+
+    add_surrogate_to_request(request, connector, allowed_hosts=list(hosts))
+
+
+def _real_transport(
+    url: str,
+    headers: dict[str, str],
+    payload: dict,
+    timeout: float,
+    surrogate: tuple[str, tuple[str, ...]] | None = None,
+) -> dict:
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
         headers={**headers, "Content-Type": "application/json"},
         method="POST",
     )
+    if surrogate is not None:
+        _attach_surrogate(req, surrogate[0], surrogate[1])
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
@@ -219,9 +298,22 @@ def call_planner(
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # An injected transport (tests) is used as-is for every
+        # endpoint. Otherwise a surrogate endpoint gets the
+        # surrogate transport; every other endpoint gets the plain
+        # urllib transport.
+        ep_transport = transport
+        if transport is _real_transport and ep.use_surrogate:
+            if not ep.surrogate_connector or not ep.surrogate_hosts:
+                errors.append(f"{ep.name}: surrogate misconfigured")
+                continue
+            ep_transport = functools.partial(
+                _real_transport,
+                surrogate=(ep.surrogate_connector, ep.surrogate_hosts),
+            )
         started = time.time()
         try:
-            data = transport(url, headers, payload, PLANNER_TIMEOUT_S)
+            data = ep_transport(url, headers, payload, PLANNER_TIMEOUT_S)
             text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             text = text.strip()
             if not text:

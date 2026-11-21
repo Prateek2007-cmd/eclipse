@@ -24,8 +24,16 @@ What it measures, and what it does NOT:
   expectation for a live run is 4-8s/step on free cloud models;
   this benchmark measures the loop overhead only.
 
+Pass --live to run the loop with the REAL planner instead of the
+mock (fix list item 1): the server's router calls gemma-4-31b on
+the user's own Antseed gateway, authenticated with the vault-held
+connector credential via the surrogate. Grounding and latency
+then ARE live-model measurements. A live run uses ~25 planner
+calls against the 200/day free quota.
+
 Usage:
     python3 evals/sih-benchmark/benchmark.py [--out results/benchmark-...json]
+    python3 evals/sih-benchmark/benchmark.py --live [--out results/benchmark-live-...json]
 """
 from __future__ import annotations
 
@@ -43,6 +51,7 @@ ROOT = BASE.parent.parent
 sys.path.insert(0, str(ROOT))
 
 from server.core import config, db  # noqa: E402
+from server.planner import router as planner_router  # noqa: E402
 from server.planner import scan  # noqa: E402
 from server.tasks import loop  # noqa: E402
 
@@ -339,19 +348,20 @@ def _mock_step_fn(actions: list[dict]):
     return call_fn
 
 
-def _loop_metrics(gt: dict) -> dict:
-    """Run the real server loop over the fixtures with the mock
-    planner and time every step."""
+def _loop_metrics(gt: dict, live: bool = False) -> dict:
+    """Run the real server loop over the fixtures and time every
+    step. Mock planner by default; --live uses the real planner
+    (gemma-4-31b on the user's own gateway) instead."""
     tmp = tempfile.mkdtemp(prefix="eclipse-benchmark-")
     old_data_dir = config.DATA_DIR
     config.DATA_DIR = Path(tmp)
     try:
-        return _loop_metrics_inner(gt)
+        return _loop_metrics_inner(gt, live=live)
     finally:
         config.DATA_DIR = old_data_dir
 
 
-def _loop_metrics_inner(gt: dict) -> dict:
+def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
     db.migrate()
 
     step_times: list[float] = []
@@ -386,8 +396,17 @@ def _loop_metrics_inner(gt: dict) -> dict:
         observation = {"url": url, "elements": elements}
         conn = db.connect()
         task_id = loop.create_task(conn, f"benchmark {name}", "")
+        if live:
+            # Fix list item 1: the real planner. call_planner matches
+            # the call_fn(prompt, local_only=False) -> (raw, model, ms)
+            # shape the loop expects.
+            plan_fn = planner_router.call_planner
+            step_fn = planner_router.call_planner
+        else:
+            plan_fn = _mock_plan_fn(actions)
+            step_fn = _mock_step_fn(actions)
         try:
-            plan = loop.plan_task(conn, task_id, call_fn=_mock_plan_fn(actions))
+            plan = loop.plan_task(conn, task_id, call_fn=plan_fn)
         except Exception as exc:  # noqa: BLE001 - benchmark reports it
             per_fixture[name] = {"error": f"plan failed: {exc}"}
             conn.close()
@@ -395,7 +414,6 @@ def _loop_metrics_inner(gt: dict) -> dict:
         steps_ok = 0
         step_errors: dict[str, str] = {}
         t0 = time.perf_counter()
-        step_fn = _mock_step_fn(actions)
         for i, action in enumerate(actions, start=1):
             t_step = time.perf_counter()
             try:
@@ -475,13 +493,24 @@ def _loop_metrics_inner(gt: dict) -> dict:
         "worst_fixture": worst_fixture,
         "worst_fixture_s": round(worst_time, 3),
         "per_fixture": per_fixture,
-        "planner": "mock (ground-truth actions) — NOT live gateway latency",
+        "planner": (
+            "live google-gemma-4-31b-it (own Antseed gateway, "
+            "surrogate auth) — real model grounding and latency"
+            if live
+            else "mock (ground-truth actions) — NOT live gateway latency"
+        ),
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Eclipse SIH benchmark (Sprint 6)")
     parser.add_argument("--out", type=Path, default=None)
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="run the loop with the real planner (gemma-4-31b on the "
+        "user's own gateway) instead of the mock",
+    )
     args = parser.parse_args()
 
     gt = _load_ground_truth()
@@ -489,9 +518,25 @@ def main() -> int:
     pii = _pii_metrics(gt)
     redaction = _redaction_proof(gt)
     resources = _resource_metrics()
-    loop_metrics = _loop_metrics(gt)
+    loop_metrics = _loop_metrics(gt, live=args.live)
     elapsed = time.time() - started
 
+    if args.live:
+        honesty = (
+            "Grounding and latency were measured with the LIVE planner "
+            "(google-gemma-4-31b-it on the user's own Antseed gateway, "
+            "authenticated with the vault-held connector credential "
+            "via the surrogate). They are real model measurements, "
+            "not mock numbers."
+        )
+    else:
+        honesty = (
+            "Grounding and latency are measured with a MOCK planner that "
+            "returns the ground-truth action. They measure the loop, not "
+            "a live model. A live gateway run is still needed for a real "
+            "planner grounding number and real step latency (honest "
+            "expectation 4-8s/step on free cloud models)."
+        )
     doc = {
         "benchmark": "eclipse-sih",
         "sprint": 6,
@@ -514,23 +559,19 @@ def main() -> int:
             "resources": resources,
             "loop": loop_metrics,
         },
-        "honesty": (
-            "Grounding and latency are measured with a MOCK planner that "
-            "returns the ground-truth action. They measure the loop, not "
-            "a live model. A live gateway run is still needed for a real "
-            "planner grounding number and real step latency (honest "
-            "expectation 4-8s/step on free cloud models)."
-        ),
+        "honesty": honesty,
     }
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = args.out or RESULTS_DIR / (
-        f"benchmark-{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}.json"
+        f"benchmark-{'live-' if args.live else ''}"
+        f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}.json"
     )
     with open(out, "w", encoding="utf-8") as f:
         json.dump(doc, f, indent=2)
     print(f"benchmark: {out}")
     print(f"  fixtures: {doc['fixtures']}")
-    print(f"  grounding (mock planner): {loop_metrics['grounding_first_try']:.1%}")
+    planner_label = "live planner" if args.live else "mock planner"
+    print(f"  grounding ({planner_label}): {loop_metrics['grounding_first_try']:.1%}")
     print(f"  PII recall {pii['recall']:.1%} / precision {pii['precision']:.1%}")
     print(f"  redaction recoverable tokens: {redaction['recoverable_tokens']}")
     print(f"  extension models: {resources['extension_models_mb']} MB (budget 300)")
