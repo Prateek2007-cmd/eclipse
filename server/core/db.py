@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS mail_drafts(
 CREATE TABLE IF NOT EXISTS mail_log(
   id TEXT PRIMARY KEY, draft_id TEXT, recipient TEXT, role_id TEXT,
   status TEXT, detail TEXT, created_at INTEGER);
+CREATE TABLE IF NOT EXISTS connectors(
+  name TEXT PRIMARY KEY, enabled INTEGER DEFAULT 1, state TEXT,
+  last_checked INTEGER, last_error TEXT);
+CREATE TABLE IF NOT EXISTS calendar_events(
+  id TEXT PRIMARY KEY, task_id TEXT, event_id TEXT, summary TEXT,
+  start TEXT, end TEXT, location TEXT, created_at INTEGER);
 """
 
 # Verified free top 5 (Sprint 0 probe, 2026-11-21). gpt-oss-120b is
@@ -174,6 +180,32 @@ def migrate(db_path: Path | None = None) -> None:
                     "CREATE TABLE rag_chunks("
                     " id TEXT PRIMARY KEY, text TEXT, kind TEXT, meta TEXT,"
                     " created_at INTEGER)"
+                )
+            # Sprint 7: connectors registry + calendar events table.
+            # The SCHEMA string declares both for fresh databases;
+            # existing ones get them here, plus the three connector
+            # rows (all on by default).
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "connectors" not in tables:
+                conn.execute(
+                    "CREATE TABLE connectors("
+                    " name TEXT PRIMARY KEY, enabled INTEGER DEFAULT 1,"
+                    " state TEXT, last_checked INTEGER, last_error TEXT)"
+                )
+            if "calendar_events" not in tables:
+                conn.execute(
+                    "CREATE TABLE calendar_events("
+                    " id TEXT PRIMARY KEY, task_id TEXT, event_id TEXT,"
+                    " summary TEXT, start TEXT, end TEXT, location TEXT,"
+                    " created_at INTEGER)"
+                )
+            for name in ("gmail", "calendar", "drive"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO connectors"
+                    "(name, enabled, state, last_checked, last_error)"
+                    " VALUES (?, 1, 'unknown', NULL, NULL)",
+                    (name,),
                 )
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:

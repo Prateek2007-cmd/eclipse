@@ -76,9 +76,13 @@ def draft_body(role: dict, profile: dict, reasons: list[str]) -> str:
 
 def already_mailed(conn, recipient: str, role_id: str) -> bool:
     """True when a live draft already exists for (recipient,
-    role_id), or a mail was already sent for it. A bounced or
-    no-reply draft does NOT block a retry — the recruiter never
-    got the mail, so the user may try again."""
+    role_id), a mail was already sent for it, or a mail to this
+    address BOUNCED for it. Plan §7.1: a bounce stops further
+    sends to that address — the mailbox does not exist, so
+    retrying the same address is pointless. A corrected address
+    is a different recipient and is not blocked. A no-reply
+    draft does NOT block a retry — the recruiter may simply not
+    have answered yet."""
     recipient = recipient.strip().lower()
     row = conn.execute(
         "SELECT COUNT(*) AS c FROM mail_drafts"
@@ -92,6 +96,13 @@ def already_mailed(conn, recipient: str, role_id: str) -> bool:
         "SELECT COUNT(*) AS c FROM mail_log"
         " WHERE LOWER(recipient) = ? AND role_id = ? AND status = 'sent'",
         (recipient, role_id),
+    ).fetchone()
+    if row["c"]:
+        return True
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM mail_log"
+        " WHERE LOWER(recipient) = ? AND status = 'bounced'",
+        (recipient,),
     ).fetchone()
     return bool(row["c"])
 

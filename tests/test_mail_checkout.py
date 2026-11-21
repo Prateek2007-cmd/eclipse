@@ -44,6 +44,10 @@ class TestColdMail(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self._old = config.DATA_DIR
         config.DATA_DIR = Path(self.tmp.name)
+        # Sprint 7: send_draft defaults to the real Gmail
+        # transport — tests must use the mock one.
+        self._old_transport = os.environ.get("ECLIPSE_MAIL_TRANSPORT")
+        os.environ["ECLIPSE_MAIL_TRANSPORT"] = "mock"
         db.migrate()
         self.conn = db.connect()
         self.task_id = loop.create_task(self.conn, "Cold-mail recruiters")
@@ -51,6 +55,10 @@ class TestColdMail(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         config.DATA_DIR = self._old
+        if self._old_transport is None:
+            os.environ.pop("ECLIPSE_MAIL_TRANSPORT", None)
+        else:
+            os.environ["ECLIPSE_MAIL_TRANSPORT"] = self._old_transport
         self.tmp.cleanup()
 
     def test_draft_names_the_role_and_the_reasons(self):
@@ -306,6 +314,9 @@ class TestMailApi(unittest.TestCase):
         env = dict(os.environ)
         env["ECLIPSE_DATA_DIR"] = cls.tmp.name
         env["ECLIPSE_TOKEN"] = _MAIL_TOKEN
+        # Sprint 7: the send endpoint defaults to the real Gmail
+        # transport — the API test must use the mock one.
+        env["ECLIPSE_MAIL_TRANSPORT"] = "mock"
         env.pop("ANTSEED_API_KEY", None)
         env.pop("GROQ_API_KEY", None)
         env["OLLAMA_BASE_URL"] = "http://127.0.0.1:1/v1"
@@ -442,6 +453,10 @@ class TestMailBlockers(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self._old = config.DATA_DIR
         config.DATA_DIR = Path(self.tmp.name)
+        # Sprint 7: send_draft defaults to the real Gmail
+        # transport — tests must use the mock one.
+        self._old_transport = os.environ.get("ECLIPSE_MAIL_TRANSPORT")
+        os.environ["ECLIPSE_MAIL_TRANSPORT"] = "mock"
         db.migrate()
         self.conn = db.connect()
         self.task_id = loop.create_task(self.conn, "Cold-mail recruiters")
@@ -449,12 +464,18 @@ class TestMailBlockers(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         config.DATA_DIR = self._old
+        if self._old_transport is None:
+            os.environ.pop("ECLIPSE_MAIL_TRANSPORT", None)
+        else:
+            os.environ["ECLIPSE_MAIL_TRANSPORT"] = self._old_transport
         self.tmp.cleanup()
         grant_store.GRANTS.revoke_all()
 
-    def test_bounced_draft_does_not_block_a_retry(self):
-        # M2: a bounced draft never reached the recruiter, so the
-        # user may draft again for the same pair.
+    def test_bounced_address_blocks_a_retry(self):
+        # Sprint 7 M4 (plan §7.1 wins over the Sprint 5 M2 call):
+        # a bounce stops further sends to that address. A new
+        # draft for the same (recipient, role) is refused; a
+        # corrected address is a different recipient.
         first = draft_mod.create_draft(
             self.conn, self.task_id, "bounce@acme.example", ROLE,
             profile.TEST_PROFILE, [],
@@ -467,7 +488,15 @@ class TestMailBlockers(unittest.TestCase):
             self.conn, self.task_id, "bounce@acme.example", ROLE,
             profile.TEST_PROFILE, [],
         )
-        self.assertIsNotNone(second)
+        self.assertIsNone(second)
+        # A different role for the same bounced address is also
+        # blocked — the mailbox does not exist.
+        other_role = draft_mod.create_draft(
+            self.conn, self.task_id, "bounce@acme.example",
+            {**ROLE, "id": "role_2", "title": "Backend Intern"},
+            profile.TEST_PROFILE, [],
+        )
+        self.assertIsNone(other_role)
 
     def test_concurrent_drafts_for_the_same_pair_yield_one_row(self):
         # B4: the unique index is the real dedup, not the check.
