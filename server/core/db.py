@@ -39,7 +39,15 @@ CREATE TABLE IF NOT EXISTS rag_chunks(
   created_at INTEGER);
 CREATE TABLE IF NOT EXISTS watches(
   id TEXT PRIMARY KEY, url TEXT, selector TEXT, last_value TEXT,
-  threshold TEXT, status TEXT, muted_until INTEGER, created_at INTEGER);
+  threshold TEXT, status TEXT, muted_until INTEGER, created_at INTEGER,
+  condition TEXT DEFAULT 'changed', interval_min INTEGER DEFAULT 60,
+  misses INTEGER DEFAULT 0, last_checked INTEGER,
+  last_fired_at INTEGER);
+CREATE TABLE IF NOT EXISTS watch_events(
+  id TEXT PRIMARY KEY, watch_id TEXT, kind TEXT, old_value TEXT,
+  new_value TEXT, detail TEXT, created_at INTEGER);
+CREATE TABLE IF NOT EXISTS briefings(
+  id TEXT PRIMARY KEY, created_at INTEGER, cards_json TEXT);
 CREATE TABLE IF NOT EXISTS grants(
   id TEXT PRIMARY KEY, origin TEXT, scope TEXT, expires_at INTEGER,
   created_at INTEGER, detail TEXT);
@@ -207,6 +215,34 @@ def migrate(db_path: Path | None = None) -> None:
                     " VALUES (?, 1, 'unknown', NULL, NULL)",
                     (name,),
                 )
+            # Sprint 8: watches gain condition/interval/miss
+            # tracking; watch_events + briefings tables.
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "watch_events" not in tables:
+                conn.execute(
+                    "CREATE TABLE watch_events("
+                    " id TEXT PRIMARY KEY, watch_id TEXT, kind TEXT,"
+                    " old_value TEXT, new_value TEXT, detail TEXT,"
+                    " created_at INTEGER)"
+                )
+            if "briefings" not in tables:
+                conn.execute(
+                    "CREATE TABLE briefings("
+                    " id TEXT PRIMARY KEY, created_at INTEGER,"
+                    " cards_json TEXT)"
+                )
+            watch_cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(watches)")}
+            for col, ddl in (
+                ("condition", "ALTER TABLE watches ADD COLUMN condition TEXT DEFAULT 'changed'"),
+                ("interval_min", "ALTER TABLE watches ADD COLUMN interval_min INTEGER DEFAULT 60"),
+                ("misses", "ALTER TABLE watches ADD COLUMN misses INTEGER DEFAULT 0"),
+                ("last_checked", "ALTER TABLE watches ADD COLUMN last_checked INTEGER"),
+                ("last_fired_at", "ALTER TABLE watches ADD COLUMN last_fired_at INTEGER"),
+            ):
+                if col not in watch_cols:
+                    conn.execute(ddl)
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

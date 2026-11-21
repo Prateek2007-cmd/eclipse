@@ -4,7 +4,7 @@ Starts uvicorn on a scratch port with a temp data dir and a fixed
 test token, then checks: token auth (401 without and with a wrong
 token, 200 with the right one), /health, /quota seeds 5 models,
 /audit/verify passes on the hash chain and FAILS on a tampered chain,
-and the SQLite schema has all 11 tables with WAL mode.
+and the SQLite schema has all 18 tables with WAL mode.
 
 The server is the only SQLite writer in production. The direct
 sqlite appends and tampers in this file are test-only, to prove the
@@ -31,6 +31,7 @@ EXPECTED_TABLES = {
     "tasks", "steps", "checkpoints", "memory", "facts", "routines",
     "audit_log", "rag_chunks", "watches", "grants", "quota", "receipts",
     "mail_drafts", "mail_log", "connectors", "calendar_events",
+    "watch_events", "briefings",
 }
 
 

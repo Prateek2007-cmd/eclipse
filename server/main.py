@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import audit_api, connectors_api, jobs_api, mail_api, memory_api, proof_api, rag_api, system, tasks_api, vault_api
+from .api import audit_api, connectors_api, jobs_api, mail_api, memory_api, monitor_api, proof_api, rag_api, system, tasks_api, vault_api
 from .core import config, db
 
 
@@ -52,6 +52,7 @@ app.include_router(mail_api.router)
 app.include_router(rag_api.router)
 app.include_router(proof_api.router)
 app.include_router(connectors_api.router)
+app.include_router(monitor_api.router)
 
 
 if __name__ == "__main__":

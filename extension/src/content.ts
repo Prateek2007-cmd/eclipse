@@ -12,6 +12,7 @@
  */
 import { executeAction, type ExecutorAction, type ExecuteOptions } from "./executor.js";
 import { buildExecuteOptions } from "./execute-options.js";
+import { readSelectorValue } from "./monitor.js";
 import { walkDom, walkDomWithNodes } from "./vision/dom-walker.js";
 import type { Box, ElementInfo } from "./vision/types.js";
 
@@ -44,6 +45,8 @@ chrome.runtime.onMessage.addListener(
       boxes?: Box[];
       action?: ExecutorAction;
       options?: ExecuteOptions & { expected?: ElementInfo; fill?: Record<string, string> };
+      // Sprint 8 watch check: the selector to read on this page.
+      selector?: string;
     },
     _sender,
     sendResponse,
@@ -54,6 +57,19 @@ chrome.runtime.onMessage.addListener(
         viewport: { width: window.innerWidth, height: window.innerHeight },
         url: location.href,
       });
+      return true;
+    }
+    if (msg.type === "eclipse.watchCheck") {
+      // Sprint 8: read one selector's current value for a watch.
+      // No PII is recorded here — the value goes to the server,
+      // which compares it against the stored last value.
+      // M12: a missing or non-string selector gets a not-found
+      // answer, not a thrown TypeError with no response.
+      if (typeof msg.selector !== "string" || msg.selector.length === 0) {
+        sendResponse({ found: false, value: null });
+        return true;
+      }
+      sendResponse(readSelectorValue(document, msg.selector));
       return true;
     }
     if (msg.type === "execute" && msg.action) {

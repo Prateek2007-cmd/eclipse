@@ -11,6 +11,167 @@
  *     it on the live page (guarded executor) → the result comes back.
  */
 const OFFSCREEN_URL = "offscreen.html";
+const SERVER = "http://127.0.0.1:8000";
+
+import { BRIEFING_ALARM, checkDueWatches, watchAlarmName, type Watch } from "./monitor.js";
+
+async function serverToken(): Promise<string> {
+  const stored = await chrome.storage.local.get("eclipseToken");
+  const token = stored["eclipseToken"];
+  if (typeof token !== "string" || token.length === 0) {
+    throw new Error("no Eclipse server token stored (open the workspace once)");
+  }
+  return token;
+}
+
+async function serverCall(path: string, init?: RequestInit): Promise<unknown> {
+  const token = await serverToken();
+  const res = await fetch(`${SERVER}${path}`, {
+    ...init,
+    headers: { "X-Eclipse-Token": token, "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) throw new Error(`server ${res.status} on ${path}`);
+  return res.json();
+}
+
+/** (Re)schedule one alarm per watch plus the daily briefing
+ * alarm. Called when the workspace saves a watch and on
+ * service-worker startup. */
+async function scheduleWatchAlarms(): Promise<void> {
+  try {
+    const data = (await serverCall("/monitor/watches")) as { watches: Watch[] };
+    const existing = await chrome.alarms.getAll();
+    for (const alarm of existing) {
+      if (alarm.name.startsWith("eclipse-watch-") || alarm.name === BRIEFING_ALARM) {
+        await chrome.alarms.clear(alarm.name);
+      }
+    }
+    for (const watch of data.watches) {
+      // M17: only active watches get an alarm — muted/broken
+      // watches would wake the worker for nothing (/due filters
+      // them out anyway).
+      if (watch.status !== "active" || watch.interval_min < 15) continue;
+      await chrome.alarms.create(watchAlarmName(watch.id), {
+        periodInMinutes: watch.interval_min,
+      });
+    }
+    // M13: the first briefing lands tomorrow morning at 08:00,
+    // not up to 24h after startup.
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(8, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+    await chrome.alarms.create(BRIEFING_ALARM, {
+      delayInMinutes: Math.ceil((next.getTime() - now.getTime()) / 60000),
+      periodInMinutes: 1440,
+    });
+  } catch (err) {
+    // B5: log instead of swallowing — if scheduling fails the
+    // watches silently never run, and nobody would know.
+    console.warn("[eclipse] could not schedule watch alarms:", err);
+  }
+}
+
+// B5: the workspace (or any caller) reschedules alarms after a
+// watch is created, muted, deleted, or repaired — new watches
+// must not wait for a Chrome restart to start checking.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === "eclipse.rescheduleWatches") {
+    void scheduleWatchAlarms().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  return false;
+});
+
+// B5: the token appears when the user first opens the workspace
+// and stores it — schedule then, not only at startup.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes["eclipseToken"]?.newValue) {
+    void scheduleWatchAlarms();
+  }
+});
+
+/** Normalise a URL for tab matching: origin + pathname without
+ * a trailing slash + search. Two URLs that differ only by a
+ * trailing slash are the same page. */
+export function normaliseWatchUrl(raw: string): string {
+  const u = new URL(raw);
+  const path = u.pathname.replace(/\/+$/, "") || "/";
+  return `${u.origin}${path}${u.search}`;
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BRIEFING_ALARM) {
+    (async () => {
+      try {
+        await serverCall("/monitor/briefing", { method: "POST" });
+      } catch {
+        // The briefing is best-effort; the user can rebuild it
+        // on demand from the workspace.
+      }
+    })();
+    return;
+  }
+  if (!alarm.name.startsWith("eclipse-watch-")) return;
+  (async () => {
+    try {
+      // B4/M16: a failed run is logged, not silently dropped.
+      const summary = await checkDueWatches({
+        fetchDue: async () => {
+          const data = (await serverCall("/monitor/due")) as { watches: Watch[] };
+          return data.watches;
+        },
+        findTab: async (url) => {
+          // B3: match the tab's ACTUAL URL, not just its origin.
+          // An origin-only match could evaluate the watch against
+          // a different page on the same site — a missing element
+          // there counts as a miss, and for a "disappeared"
+          // watch it fires a false alert.
+          let wanted: string;
+          try {
+            wanted = normaliseWatchUrl(url);
+          } catch {
+            return null;
+          }
+          const origin = new URL(url).origin;
+          const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+          for (const tab of tabs) {
+            if (!tab.url || tab.id === undefined) continue;
+            try {
+              if (normaliseWatchUrl(tab.url) === wanted) return tab.id;
+            } catch {
+              continue;
+            }
+          }
+          return null;
+        },
+        observeTab: async (tabId, watch) => {
+          const result = (await chrome.tabs.sendMessage(tabId, {
+            type: "eclipse.watchCheck",
+            selector: watch.selector,
+          })) as { found: boolean; value: string | null };
+          return result;
+        },
+        reportCheck: async (watchId, obs) => {
+          const verdict = (await serverCall(`/monitor/watches/${watchId}/check`, {
+            method: "POST",
+            body: JSON.stringify(obs),
+          })) as { fired: boolean; broken: boolean; status: string; reason: string };
+          return verdict;
+        },
+      });
+      if (summary.errors.length > 0) {
+        console.warn("[eclipse] watch check errors:", summary);
+      }
+    } catch (err) {
+      console.warn("[eclipse] watch alarm run failed:", err);
+    }
+  })();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  void scheduleWatchAlarms();
+});
 
 async function ensureOffscreen(): Promise<void> {
   const contexts = await chrome.runtime.getContexts({
