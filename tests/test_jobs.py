@@ -457,6 +457,84 @@ class TestApprovalBeforeSubmit(unittest.TestCase):
         result = loop.execute_step(self.conn, task_id, 1, obs, call_fn=mock)
         self.assertEqual(result["action"]["element_id"], "el_login_submit")
 
+    def _two_step_apply_task(self):
+        """A job-listing task whose step 1 clicks el_apply_1 and is
+        done (what verify_step leaves behind after a good click)."""
+        task_id = loop.create_task(self.conn, "Apply to the shortlisted roles")
+        loop.plan_task(
+            self.conn, task_id,
+            call_fn=lambda prompt, **kw: (json.dumps([
+                {"step": 1, "description": "click the apply button",
+                 "expected_end_state": "application form opens"},
+                {"step": 2, "description": "click the next button",
+                 "expected_end_state": "next section opens"},
+            ]), "mock:planner", 5.0),
+        )
+        obs = {
+            "url": "http://localhost/job-listing.html",
+            "elements": [
+                {"id": "el_apply_1", "tag": "button", "role": "button",
+                 "name": "Apply", "text": "", "value": "",
+                 "visible": True, "interactable": True},
+                {"id": "el_next", "tag": "button", "role": "button",
+                 "name": "Next", "text": "", "value": "",
+                 "visible": True, "interactable": True},
+            ],
+        }
+        mock = lambda prompt, **kw: (
+            json.dumps({"action": "click", "element_id": "el_apply_1"}),
+            "mock:planner", 5.0,
+        )
+        loop.execute_step(self.conn, task_id, 1, obs, call_fn=mock)
+        self.conn.execute(
+            "UPDATE steps SET status = 'done' WHERE task_id = ? AND n = 1",
+            (task_id,),
+        )
+        self.conn.commit()
+        return task_id, obs
+
+    def test_repeated_click_replans_with_feedback(self):
+        # Fix list item 2 prep: the live planner repeated
+        # "click el_apply_1" and stalled the job-listing fixture.
+        # A repeat is now a re-plan with feedback, not an instant
+        # step failure — the second attempt picks another element.
+        task_id, obs = self._two_step_apply_task()
+        prompts_seen: list[str] = []
+        calls = {"n": 0}
+
+        def mock(prompt, **kw):
+            prompts_seen.append(prompt)
+            calls["n"] += 1
+            element = "el_apply_1" if calls["n"] == 1 else "el_next"
+            return (
+                json.dumps({"action": "click", "element_id": element}),
+                "mock:planner", 5.0,
+            )
+
+        result = loop.execute_step(self.conn, task_id, 2, obs, call_fn=mock)
+        self.assertEqual(result["action"]["element_id"], "el_next")
+        self.assertEqual(calls["n"], 2)
+        self.assertIn("already clicked", prompts_seen[1])
+        self.assertIn("el_apply_1", prompts_seen[1])
+
+    def test_repeated_click_three_times_fails_the_step(self):
+        # A planner that keeps repeating the same click exhausts
+        # the 3-call budget: the step fails and the task asks the
+        # user — still fail-closed, never a silent re-submit.
+        from server.planner import validate
+
+        task_id, obs = self._two_step_apply_task()
+        mock = lambda prompt, **kw: (
+            json.dumps({"action": "click", "element_id": "el_apply_1"}),
+            "mock:planner", 5.0,
+        )
+        with self.assertRaises(validate.ValidationError) as ctx:
+            loop.execute_step(self.conn, task_id, 2, obs, call_fn=mock)
+        self.assertIn("could not produce a valid action in 3 calls", str(ctx.exception))
+        self.assertIn("already clicked", str(ctx.exception))
+        step = loop.get_task(self.conn, task_id)
+        self.assertEqual(step["status"], "ask_user")
+
     def test_approval_required_for_buy_send_and_mail_goals(self):
         # §5.4: purchases and email sends need a fresh approval —
         # not just applications.

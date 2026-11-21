@@ -567,13 +567,22 @@ def execute_step(
             )):
                 _handoff(conn, task_id, n, f"action targets a human-only element: {action.get('element_id')}")
                 raise ValueError(f"step {n} targets a human-only element")
-        # Never retry a submit: refuse a click on an element that
-        # already has a done click step in this task.
+        # Never retry a submit: a click on an element that already
+        # has a done click step in this task is a REPEAT, not an
+        # instant failure — tell the planner which step already
+        # clicked it and let it re-plan within this step's 3-call
+        # budget (fix list item 2 prep: the live planner repeated
+        # "click el_apply_1" and stalled the job-listing fixture
+        # twice, because the old code raised here instead of
+        # re-planning). After 3 repeats the step fails with the
+        # "could not produce a valid action in 3 calls" error below
+        # and the task asks the user — still fail-closed.
         if action.get("action") == "click" and action.get("element_id"):
             done_rows = conn.execute(
-                "SELECT action_json FROM steps WHERE task_id = ? AND status = 'done'",
+                "SELECT n, action_json FROM steps WHERE task_id = ? AND status = 'done'",
                 (task_id,),
             ).fetchall()
+            repeated_step = None
             for done_row in done_rows:
                 try:
                     done_action = json.loads(done_row["action_json"] or "{}")
@@ -583,9 +592,19 @@ def execute_step(
                     done_action.get("action") == "click"
                     and done_action.get("element_id") == action["element_id"]
                 ):
-                    raise validate.ValidationError(
-                        f"element {action['element_id']} was already clicked successfully in this task"
-                    )
+                    repeated_step = done_row["n"]
+                    break
+            if repeated_step is not None:
+                last_error = (
+                    f"element {action['element_id']} was already clicked "
+                    f"successfully in step {repeated_step} of this task; "
+                    "choose a different element for this step"
+                )
+                logger.warning(
+                    "task %s step %s planner attempt %d repeated a click: %s",
+                    task_id, n, attempt, last_error,
+                )
+                continue
         # Already applied (§6.9): before a consequential click,
         # check the receipts + memory. A role applied to in an
         # earlier task (or on another page/element) is never

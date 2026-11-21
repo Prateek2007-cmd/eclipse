@@ -424,8 +424,12 @@ def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
                 # field, a click navigates away — the clicked element
                 # is gone from the new page (verify_step strips query
                 # and fragment from URLs, so a ?done=1 suffix alone
-                # does NOT verify a click).
-                new_elements = [dict(e) for e in elements]
+                # does NOT verify a click). The new page is derived
+                # from the CURRENT observation, not the fixture's
+                # original element list — otherwise a clicked
+                # element comes back on the next step (job-listing
+                # stalled in run 5 for exactly this reason).
+                new_elements = [dict(e) for e in observation.get("elements", [])]
                 if action["action"] == "type":
                     for e in new_elements:
                         if e["id"] == action["element_id"]:
@@ -447,6 +451,13 @@ def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
                     previous_url=url,
                     previous_observation=observation,
                 )
+                # Carry the updated page forward: the next step must
+                # see the page AFTER this action (clicked element
+                # gone, typed field filled), the way the extension
+                # re-observes after every step. Without this the
+                # live planner kept seeing the clicked element and
+                # repeating it (job-listing stalled in runs 2-4).
+                observation = new_observation
                 step_times.append(time.perf_counter() - t_step)
                 total += 1
                 if verify.get("verified"):
