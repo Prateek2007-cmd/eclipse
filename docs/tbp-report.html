@@ -1,0 +1,738 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Eclipse — TBP Report</title>
+<style>
+@page { size: A4; margin: 2.5cm; }
+body { font-family: Georgia, serif; font-size: 11pt; line-height: 1.6; color: #111; }
+h1 { font-size: 20pt; page-break-before: always; }
+h1:first-of-type { page-break-before: avoid; }
+h2 { font-size: 14pt; margin-top: 1.5em; }
+h3 { font-size: 12pt; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 10pt; }
+th, td { border: 1px solid #999; padding: 4px 8px; text-align: left; vertical-align: top; }
+th { background: #eee; }
+code { font-family: monospace; font-size: 10pt; }
+pre { background: #f5f5f5; padding: 8px; overflow-x: auto; font-size: 9pt; }
+</style></head><body><h1>Eclipse: A Privacy-First Browser Agent with On-Device Visual Perception</h1>
+
+<p>**Technical Project Report (TBP)**</p>
+
+<table>
+<tr><th>Project</th><th>Eclipse — SIH 26171: On-device Visual Perception for Light-weight Browser Agents (ISRO)</th></tr>
+<tr><td>Team</td><td>Akash Goud Sidduluri (1602-24-737-066), Ashish Kumar (1602-24-737-073), Mahesh Vallabhu (1602-24-737-084)</td></tr>
+<tr><td>Guide</td><td>Dr. B Kezia Rani</td></tr>
+<tr><td>Institution</td><td>Vasavi College of Engineering, B.E. Information Technology (2024–2028)</td></tr>
+<tr><td>Date</td><td>21 November 2026</td></tr>
+<tr><td>Repository</td><td>https://github.com/akashgoudsidduluri/eclipse</td></tr>
+</table>
+
+<hr/>
+
+<h2>Abstract</h2>
+
+<p>Browser agents promise to do real work on the web — apply for a job,</p>
+<p>answer mail, watch a result portal — but every existing agent sends</p>
+<p>what it sees to the cloud. A page that holds a name, an email, a card</p>
+<p>number, or a face is shipped to a remote model before the user has any</p>
+<p>say in the matter. Eclipse inverts that order. It is a privacy-first</p>
+<p>browser agent that perceives the page on the device, detects and</p>
+<p>redacts personal data on the device, and only then asks a cloud</p>
+<p>planner — an open-weights model, never a proprietary one — what to do</p>
+<p>next, with the redacted observation only.</p>
+
+<p>The perception stack runs entirely in the browser extension: a DOM</p>
+<p>and accessibility-tree walker, YOLO26n object detection, PP-OCRv4</p>
+<p>text recognition, BlazeFace face detection, and a lazily loaded</p>
+<p>Florence-2 grounding model, all on WebGPU through ONNX Runtime Web</p>
+<p>and Transformers.js. A fail-closed gate blocks any step whose</p>
+<p>observation still contains detectable personal data, and a second</p>
+<p>PII scan runs before every cloud call. Secrets — card numbers, CVV,</p>
+<p>passwords, one-time codes — are filled locally from a Fernet vault</p>
+<p>and never reach the planner, the logs, or the cloud. Every</p>
+<p>consequential action needs approval first, every step is verified by</p>
+<p>re-observing the page, and every action is written to a hash-chained</p>
+<p>audit log.</p>
+
+<p>On the SIH benchmark (12 local fixture pages, run 2026-11-21), Eclipse</p>
+<p>measured 100% first-try visual grounding (18/18 executable steps, mock</p>
+<p>planner), 100% PII recall and precision on regex-detectable types,</p>
+<p>0 recoverable tokens after redaction, 26.7 MB of always-loaded models</p>
+<p>(budget 300 MB), and a loop latency p50 of 0.001 s (mock planner —</p>
+<p>loop overhead only). The live planner grounding number and real step</p>
+<p>latency (honest expectation 4–8 s/step on free cloud models) are</p>
+<p>explicitly unmeasured and are stated as such wherever the numbers</p>
+<p>appear. The system is built in nine sprints over ~44 hours, with a</p>
+<p>test gate and an independent review-and-fix pass after each sprint.</p>
+
+<p>**Keywords:** browser agent, on-device vision, privacy, redaction,</p>
+<p>WebGPU, ONNX, YOLO, OCR, open-weights models, SIH 26171.</p>
+
+<hr/>
+
+<h2>1. Introduction</h2>
+
+<h3>1.1 The problem in one paragraph</h3>
+
+<p>A browser agent is useful exactly when the page it works on is</p>
+<p>personal: a job portal with your name and phone number, an inbox</p>
+<p>with offer letters, a checkout with your card. The standard</p>
+<p>architecture sends a screenshot or a DOM dump of that page to a</p>
+<p>cloud model and asks what to click. The personal data leaves the</p>
+<p>device before any privacy decision is made, and the user has no</p>
+<p>way to check what left, or to take it back. The existing agents</p>
+<p>are also opaque: they do not show what was sent, they do not prove</p>
+<p>what was redacted, and they do not log what they did in a form the</p>
+<p>user can verify.</p>
+
+<h3>1.2 What Eclipse does differently</h3>
+
+<p>Eclipse treats privacy as a pipeline, not a policy. Every step of</p>
+<p>a task runs the same sequence: observe locally, detect personal</p>
+<p>data locally, redact destructively, pass a fail-closed gate, scan</p>
+<p>a second time, and only then plan in the cloud — with the redacted</p>
+<p>observation only. The planner is an open-weights model (Gemma,</p>
+<p>Nemotron, Mistral, GPT-OSS) served through the team's own gateway;</p>
+<p>proprietary models are never the runtime planner. Execution is</p>
+<p>guarded: an action must resolve to a real DOM element, match the</p>
+<p>planner's intent, and pass an allow-list. Every step is verified</p>
+<p>by re-observing the page. Every consequential action — apply, buy,</p>
+<p>send — needs the user's approval first, and every action lands in</p>
+<p>a hash-chained audit log the user can verify.</p>
+
+<h3>1.3 What this report covers</h3>
+
+<p>This report documents the system as built in November 2026: the</p>
+<p>architecture (§5), the vision and redaction pipeline (§6), the</p>
+<p>planner and guarded executor (§7), the vault and connectors (§8),</p>
+<p>live monitoring (§9), and the testing and SIH metrics (§10). All</p>
+<p>numbers are from real benchmark runs with dates; where a number is</p>
+<p>not yet measured — live planner grounding and live step latency —</p>
+<p>the report says so plainly instead of substituting a target.</p>
+
+<hr/>
+
+<h2>2. Literature survey</h2>
+
+<p>Browser automation began with scripted tools (Selenium, Playwright)</p>
+<p>that execute exactly what a programmer wrote — precise, but blind.</p>
+<p>The current generation of agents adds a vision-language model in</p>
+<p>the loop: the model looks at the page and decides the next action.</p>
+<p>The best-known systems (OpenAI Operator, Anthropic's computer-use</p>
+<p>reference, and the research systems behind OSWorld and WebArena)</p>
+<p>all share one architecture: the observation leaves the device.</p>
+
+<p>That architecture has three documented weaknesses. First, **the</p>
+<p>privacy gap**: screenshots and DOM dumps routinely contain names,</p>
+<p>emails, card numbers, and faces, and they are sent to a remote</p>
+<p>model before any redaction. Second, **the grounding gap**: models</p>
+<p>hallucinate element locations, click the wrong control, and have</p>
+<p>no cheap way to verify what they did. Third, **the trust gap**:</p>
+<p>there is no receipt for what was sent, no proof of what was</p>
+<p>redacted, and no audit trail the user can check.</p>
+
+<p>On-device perception is the established answer to the first gap</p>
+<p>in adjacent fields: mobile vision pipelines (ML Kit, Core ML) run</p>
+<p>detection on the phone, and the browser now has the same capability</p>
+<p>through WebGPU and ONNX Runtime Web. YOLO-family detectors,</p>
+<p>PP-OCR, and BlazeFace all have ONNX exports small enough to ship</p>
+<p>in an extension (under 30 MB combined). Florence-2 showed that a</p>
+<p>single vision model can ground arbitrary phrases ("the submit</p>
+<p>button") without a fixed label set. Eclipse combines these pieces</p>
+<p>into one pipeline whose explicit job is to make the cloud call</p>
+<p>safe, and adds the two pieces the literature usually omits: a</p>
+<p>fail-closed gate with a second scan, and a proof surface (what was</p>
+<p>sent, egress audit, redaction proof, latency waterfall) that lets</p>
+<p>a judge verify the privacy claim instead of taking it on trust.</p>
+
+<hr/>
+
+<h2>3. Problem statement</h2>
+
+<p>Build a light-weight browser agent that:</p>
+
+<p>1. **Sees the page on the device** — DOM, accessibility tree,</p>
+<p>   vision (detection, OCR, faces, phrase grounding) — without</p>
+<p>   sending the page anywhere first.</p>
+<p>2. **Redacts personal data on the device** — destructively, with a</p>
+<p>   verifiable proof (0 recoverable tokens) — before any cloud call.</p>
+<p>3. **Plans in the cloud with open-weights models only**, on the</p>
+<p>   redacted observation, one JSON action per step.</p>
+<p>4. **Executes safely** — actions resolve to real elements, pass an</p>
+<p>   allow-list, and are verified by re-observation.</p>
+<p>5. **Keeps secrets local** — card numbers, CVV, passwords, and OTPs</p>
+<p>   never reach the planner, the logs, or the cloud.</p>
+<p>6. **Proves what it did** — what was sent, egress audit, redaction</p>
+<p>   proof, latency waterfall, and a hash-chained audit log.</p>
+<p>7. **Stays light** — ≤500 MB RAM during a task, ≤300 MB of model</p>
+<p>   download, ≤6 s/step (with an honest 4–8 s expectation on free</p>
+<p>   cloud models).</p>
+
+<p>The SIH problem statement scores five metrics (§10.2): visual</p>
+<p>accuracy (25%), PII recall/precision (20%), redaction precision</p>
+<p>(20%), client resource use (20%), and end-to-end latency (15%).</p>
+
+<hr/>
+
+<h2>4. Objectives</h2>
+
+<p>1. A working agent that completes a real task end to end on local</p>
+<p>   fixtures — search a job listing, shortlist matching roles, fill</p>
+<p>   an application form, and record a receipt — without leaking</p>
+<p>   personal data.</p>
+<p>2. A redaction pipeline with measured recall ≥95% and precision</p>
+<p>   ≥90% on regex-detectable PII, and 0 recoverable tokens after</p>
+<p>   redaction.</p>
+<p>3. Visual grounding ≥85% first-try on fixtures.</p>
+<p>4. A vault and approval flow in which no secret reaches the</p>
+<p>   planner and no consequential action happens without approval.</p>
+<p>5. Connectors (Gmail → Calendar → Drive) that send real mail only</p>
+<p>   after approval, with bounce handling and rate limits.</p>
+<p>6. Live monitoring (watches + morning briefing) that runs only</p>
+<p>   while Chrome is open and never polls from the server.</p>
+<p>7. A workspace that shows the task, the proof, and the audit —</p>
+<p>   and a demo that a reviewer can run from a fresh clone.</p>
+
+<hr/>
+
+<h2>5. System design</h2>
+
+<h3>5.1 Architecture</h3>
+
+<p>Eclipse has three parts and one rule: **the extension never writes</p>
+<p>the database; the server is the only writer.**</p>
+
+<p>```</p>
+<p>┌────────────────────── Extension (Chrome MV3) ──────────────────────┐</p>
+<p>│ content script        offscreen document          service worker   │</p>
+<p>│  DOM + AX walker  →   YOLO / OCR / BlazeFace  →   alarms, tabs,    │</p>
+<p>│  guarded executor     Florence-2 (lazy, WebGPU)   observe/execute  │</p>
+<p>│  blackout overlays    redactor + gate + 2nd scan   chrome.storage  │</p>
+<p>└──────────────┬───────────────────────┬────────────────────────────┘</p>
+<p>               │ redacted payload only │ localhost, token auth</p>
+<p>┌──────────────▼───────────────────────▼────────────────────────────┐</p>
+<p>│ Server (FastAPI, 127.0.0.1:8000)                                   │</p>
+<p>│  planner router (open-weights fallback chain) · tasks loop · vault │</p>
+<p>│  jobs/matcher · mail · connectors · monitor · RAG · proof · audit  │</p>
+<p>│  SQLite (WAL) data/eclipse.db · Fernet vault data/vault.fernet     │</p>
+<p>└────────────────────────────────────────────────────────────────────┘</p>
+<p>```</p>
+
+<p>The extension owns perception and execution. The server owns</p>
+<p>planning, state, secrets, and proof. Nothing else writes to the</p>
+<p>database, and no component trusts page text: page content is</p>
+<p>untrusted data at both the planner and the executor, and</p>
+<p>injection-looking text is logged, not followed.</p>
+
+<h3>5.2 Data flow (one step)</h3>
+
+<p>1. **Observe** — the content script walks the DOM and</p>
+<p>   accessibility tree; the offscreen document runs YOLO, OCR,</p>
+<p>   BlazeFace, and (lazily, at most once per step) Florence-2.</p>
+<p>2. **Detect** — the redactor finds PII by pattern and by field</p>
+<p>   label (name, address, roll, card, CVV, OTP, password).</p>
+<p>3. **Redact** — values are replaced by placeholders (`[NAME_1]`,</p>
+<p>   `[EMAIL_1]`, `[CARD_LAST4]`, …); sensitive fields are blacked</p>
+<p>   out on the screenshot; faces are blacked out.</p>
+<p>4. **Gate** — fail-closed. A dirty second scan, a failed DOM walk,</p>
+<p>   a denied egress target, or a failed OCR/Face step on an</p>
+<p>   image/mixed task blocks the step. YOLO or Florence-2 failing is</p>
+<p>   a warning only.</p>
+<p>5. **Second scan** — the server re-scans the assembled prompt</p>
+<p>   before the planner call, including on retry prompts.</p>
+<p>6. **Plan** — the planner (open-weights, fallback chain) returns</p>
+<p>   one JSON action. The action must name a real element id from</p>
+<p>   the observation.</p>
+<p>7. **Execute** — the guarded executor re-checks the element</p>
+<p>   (tag, accessible name, enabled, visible), enforces the</p>
+<p>   submit guard and the allow-list, and performs the action.</p>
+<p>8. **Verify** — the page is re-observed and diffed against the</p>
+<p>   baseline: a click must change the URL, remove the element, or</p>
+<p>   surface a confirmation word; a type must change the field's</p>
+<p>   value.</p>
+<p>9. **Checkpoint + log** — the step, the receipt, and the audit</p>
+<p>   entry are written. The planner input is capped at 8K tokens;</p>
+<p>   history is summarised at checkpoints, never resent in full.</p>
+
+<h3>5.3 Redaction scheme</h3>
+
+<p>Placeholders are value-stable per type within a task</p>
+<p>(`[EMAIL_1]`, `[EMAIL_2]`, …). Fixed tokens exist for secrets:</p>
+<p>`[CARD_LAST4]` for a card number, `[CVV]`, `[OTP]`,</p>
+<p>`[PASSWORD_1]`. The server knows the scheme (the redaction</p>
+<p>contract) and the vault maps placeholders back to values locally</p>
+<p>at execute time — the planner never sees a value, only the token.</p>
+<p>Redaction is destructive on the image side: blackout boxes are</p>
+<p>painted over the screenshot and the regions are verified to have</p>
+<p>zero pixel variance afterwards. The full value lives only in</p>
+<p>`watches.last_value` (where a WatchCard needs it) and in the</p>
+<p>per-task vault grant (in memory, wiped on expiry); events,</p>
+<p>reasons, briefing cards, and the egress audit carry redacted</p>
+<p>previews or hit types only.</p>
+
+<h3>5.4 Threat model and limits (stated honestly)</h3>
+
+<p>- The audit hash chain **proves tampering after the fact; it does</p>
+<p>  not prevent it**. The report does not claim tamper-proofing.</p>
+<p>- A bounce stops further sends to that address; a no-reply does</p>
+<p>  not block a retry.</p>
+<p>- The extension never writes SQLite. The server binds 127.0.0.1</p>
+<p>  only, with token auth and a CORS allow-list.</p>
+<p>- CAPTCHA, 3-D Secure, passkeys, first credential entry, and</p>
+<p>  second-device OTP are human-only. No solver is built.</p>
+<p>- Watches run only while Chrome is open (chrome.alarms). There is</p>
+<p>  no background server polling.</p>
+<p>- The planner is open-weights only. Proprietary models are used</p>
+<p>  for build-time review, never as the runtime planner.</p>
+
+<hr/>
+
+<h2>6. Implementation — vision and redaction</h2>
+
+<h3>6.1 DOM and accessibility walker</h3>
+
+<p>`walkDom` skips script/style/head/meta/link and hidden nodes,</p>
+<p>derives roles from attributes or an implicit map, and computes</p>
+<p>accessible names (aria-label → labelledby → label[for] →</p>
+<p>wrapping label → placeholder → alt → own text). Password, OTP,</p>
+<p>and CVV values are never recorded. Hidden inputs are walked with</p>
+<p>`visible=false`. Duplicate explicit ids keep the first; synthetic</p>
+<p>ids are `eclipse_el_<n>`. The walk caps at 2000 elements and</p>
+<p>reports truncation. Each element carries its tag, role, name,</p>
+<p>text, type, and whether it is inside a form — the executor's</p>
+<p>fingerprint depends on it.</p>
+
+<h3>6.2 Detection cascade</h3>
+
+<p>- **YOLO26n** (640 letterbox) for objects. The parser handles</p>
+<p>  both the NMS-free `[1,300,6]` output and the classic</p>
+<p>  `[1,84,8400]` output with NMS (IoU 0.45, conf 0.25).</p>
+<p>- **PP-OCRv4** for text: DBNet detection (threshold 0.3,</p>
+<p>  8-connected flood fill) + CRNN recognition, with the charset</p>
+<p>  extracted from the rec model's own ONNX metadata (6623 chars).</p>
+<p>- **BlazeFace** for faces. Verified live: one output,</p>
+<p>  `selectedBoxes`; detection count = `data.length / 16`.</p>
+<p>- **Florence-2-base-ft** (lazy, WebGPU only, at most one call per</p>
+<p>  step) for phrase grounding (`<CAPTION_TO_PHRASE_GROUNDING>`).</p>
+
+<p>Detectors run in parallel (`Promise.all`). The cascade is</p>
+<p>fail-closed where it matters: a missing DOM walk, a failed OCR on</p>
+<p>an image task, or a failed face step blocks the observation.</p>
+
+<h3>6.3 Redactor and gate</h3>
+
+<p>The redactor checks label prefixes first on the original text,</p>
+<p>then runs the pattern pass with earliest+longest overlap</p>
+<p>resolution (a 16-digit card number must not also match as</p>
+<p>Aadhaar). Sensitive fields get a hit even when the value is</p>
+<p>withheld. Blackout boxes are expanded 2% and merged. The second</p>
+<p>scan re-runs the patterns on the final payload and also catches</p>
+<p>any recorded raw value (length ≥ 4) still present as a substring.</p>
+<p>The gate blocks on a dirty second scan, a denied egress target,</p>
+<p>or a failed required detector — and the step never reaches the</p>
+<p>cloud.</p>
+
+<hr/>
+
+<h2>7. Implementation — planner, executor, and verification</h2>
+
+<h3>7.1 Planner router</h3>
+
+<p>The fallback chain is open-weights only: the team's own Antseed</p>
+<p>gateway (verified free models: gemma-4-31b as the live planner,</p>
+<p>nemotron-3-nano-30b, gemma-4-26b, mistral-small-3-2-24b) →</p>
+<p>OrcaRouter free → Groq gpt-oss-120b → Ollama local qwen2.5:7b.</p>
+<p>Each call has an 8 s timeout and a 400-token output cap; an empty</p>
+<p>response falls through to the next endpoint. Quota is tracked</p>
+<p>(200/day on the gateway, warning at 80%). `local_only` filters</p>
+<p>the chain to Ollama. Every attempt is recorded in the outbound</p>
+<p>log with the endpoint, model, token estimate, and latency — the</p>
+<p>proof views read from that log.</p>
+
+<p>The planner prompt carries the redaction contract (placeholders,</p>
+<p>never values), the action schema (one JSON action: click, type,</p>
+<p>select, navigate, wait, scroll), and injection markers. The</p>
+<p>planner input is capped at 8K tokens; the observation format</p>
+<p>keeps visible interactive elements only, one line each, and</p>
+<p>truncation drops from the front so the submit button survives.</p>
+
+<h3>7.2 Guarded executor</h3>
+
+<p>The executor re-checks the element at execution time: the tag</p>
+<p>must match the fingerprint and, when a name was recorded, the</p>
+<p>accessible name must match. Disabled or hidden elements are</p>
+<p>refused. The submit guard refuses a submit click with no task id;</p>
+<p>any button inside a form is a submit. Navigation is allow-listed</p>
+<p>by host; non-http(s) href schemes are refused except same-page</p>
+<p>fragments. Type refuses non-text targets, checkboxes, radios,</p>
+<p>file inputs, and readonly fields. Placeholders resolve through</p>
+<p>the vault fill map only — a placeholder without a fill value</p>
+<p>refuses rather than typing the token.</p>
+
+<h3>7.3 Verify by re-observing</h3>
+
+<p>`verify_step` diffs the new observation against the baseline.</p>
+<p>A click verifies when the URL changed, the acted-on element is</p>
+<p>gone, or a confirmation word appears in new text but not in</p>
+<p>baseline text. A type/select verifies when the field's value is</p>
+<p>non-empty and differs from baseline. URLs are compared by origin</p>
+<p>+ pathname only, so a `?done=1` suffix cannot fake a</p>
+<p>verification. Step limits are max 25 steps/task, max 3</p>
+<p>retries/step, max 3 planner calls/step, with 1s/2s/4s backoff.</p>
+<p>A submit, charge, or send is never retried; compensation after a</p>
+<p>partial submission reports what succeeded and never re-submits a</p>
+<p>success.</p>
+
+<h3>7.4 Job hunt (the demo task)</h3>
+
+<p>The matcher scores roles against the profile (title, stipend,</p>
+<p>location, deadline, skills, year, degree, CGPA) and returns the</p>
+<p>fits sorted by score, then earliest deadline. The loop records a</p>
+<p>receipt per applied role (idempotent on task+role), checks</p>
+<p>already-applied before any consequential click, and requires</p>
+<p>approval before the submit. The demo task is: apply to one role</p>
+<p>in ≤90 s end to end.</p>
+
+<hr/>
+
+<h2>8. Implementation — vault, mail, and connectors</h2>
+
+<h3>8.1 Vault</h3>
+
+<p>Two kinds of secret. Opted-in login passwords live in a Fernet</p>
+<p>file (`data/vault.fernet`, 0600, PBKDF2-HMAC-SHA256 with 600,000</p>
+<p>iterations, random 16-byte salt). Card numbers and CVV are</p>
+<p>entered per task, never stored — they live only in the per-task</p>
+<p>grant in memory (15-minute expiry, 10-minute idle lock, wiped on</p>
+<p>expiry or revoke). OTP is never stored anywhere. The extension</p>
+<p>holds a WebCrypto vault module (AES-256-GCM, unit-tested, not yet</p>
+<p>wired into the fill path). Approval happens **before** vault fill:</p>
+<p>a secret type with no approval raises `ask_user` instead of</p>
+<p>failing silently. The fill map travels only in the local execute</p>
+<p>response, never to the planner, never in a log — and the execute</p>
+<p>response body is never logged.</p>
+
+<h3>8.2 Cold mail</h3>
+
+<p>Drafts are built from the real shortlist (full role object, no</p>
+<p>fabricated titles; non-fitting roles are skipped). One approval</p>
+<p>sends one draft — the grant names the draft and is consumed on</p>
+<p>send. Dedup is a partial unique index (a bounced draft does not</p>
+<p>block a retry of a *different* role, but a bounce blocks the</p>
+<p>*address* for any role, per §7.1). The send log records sent,</p>
+<p>bounced, and no-reply. The draft promises no attachment; the</p>
+<p>resume is attached at send time, opt-in, and only the user's own</p>
+<p>file is ever attached (a fix in Sprint 7 closed a real bug in</p>
+<p>which the newest matching file on disk belonged to someone else).</p>
+
+<h3>8.3 Connectors (Gmail → Calendar → Drive)</h3>
+
+<p>Eclipse does not hold Google OAuth tokens — they live in the</p>
+<p>platform connector store, which Eclipse cannot read. The server</p>
+<p>reaches Gmail, Calendar, and Drive by shelling out to the</p>
+<p>platform CLI, which holds the grant. Gmail search redacts bodies</p>
+<p>(and subjects) before planner use; sends are rate-limited</p>
+<p>(10/task, 1 per 5 s, thread-locked) and bounce-checked (DSN</p>
+<p>search, 7-day window). Calendar free/busy is fail-closed (a</p>
+<p>missing calendar is an error, not "free"), event creation is</p>
+<p>behind a single-use approval grant and is idempotent per</p>
+<p>task/summary/start. Drive upload requires an absolute path inside</p>
+<p>the home directory. Error kinds are classified: auth → 503 with</p>
+<p>a reconnect URL, quota → 429 with a single retry for reads, else</p>
+<p>502 with a generic detail (raw CLI text stays in the server log).</p>
+
+<hr/>
+
+<h2>9. Implementation — live monitoring and workspace</h2>
+
+<h3>9.1 Watches</h3>
+
+<p>A watch is URL + selector + condition (changed / appeared /</p>
+<p>disappeared / contains) + interval (≥15 min). Checks run on</p>
+<p>chrome.alarms in the extension, only while Chrome is open, and</p>
+<p>only against an open tab whose URL matches exactly. The server</p>
+<p>evaluates the observation: the first sighting is the baseline</p>
+<p>(no alert on what was first seen, except `appeared`, where the</p>
+<p>first sighting *is* the event). A 1-hour cooldown suppresses the</p>
+<p>same change only — a new value fires even inside the hour. Three</p>
+<p>misses in a row mark a watch broken and alert once; a broken</p>
+<p>watch recovers when its element returns, and a repair endpoint</p>
+<p>re-picks the selector. Mute expires (the watch becomes due</p>
+<p>again). Watched values are stored redacted in events and reasons.</p>
+
+<h3>9.2 Morning briefing</h3>
+
+<p>Five to ten cards: watch firings (deduped per watch) plus one</p>
+<p>Gmail inbox scan (read-only). Generated on demand and once each</p>
+<p>morning at 08:00 while Chrome is open. A briefing never sends</p>
+<p>mail or messages — it shows; the user acts. If Gmail is down,</p>
+<p>the briefing says so on a card instead of silently shipping</p>
+<p>without the inbox scan.</p>
+
+<h3>9.3 Workspace</h3>
+
+<p>The workspace is a Vite + React 19 + TypeScript app served by</p>
+<p>the local server at `/workspace`, in the dark 60/30/10 design</p>
+<p>system (`#070B12` / `#12212B` / `#FF6B35`). Three panes: Task &</p>
+<p>Plan (goal, plan timeline, receipts, pause/resume/cancel),</p>
+<p>Proof (SIH metrics, what-was-sent, redaction proof, live HUD),</p>
+<p>and Trace & Audit (quota, vault status, hash chain with a Verify</p>
+<p>button). A fourth section holds watches and the briefing, and a</p>
+<p>lazy-loaded 3D scene — "The Privacy Boundary" — shows redacted</p>
+<p>tokens passing through a glowing wall while raw personal data</p>
+<p>bounces off, with a static fallback when WebGL is unavailable.</p>
+<p>The token lives in the tab only (sessionStorage) and is never</p>
+<p>written to a file.</p>
+
+<hr/>
+
+<h2>10. Testing and SIH metrics</h2>
+
+<h3>10.1 Fixtures and harness</h3>
+
+<p>Twelve local fixture pages (login, job listing, application form,</p>
+<p>checkout, inbox, result portal, scanned document, hidden-fields</p>
+<p>form, faces, PII in text, CAPTCHA box, broken selector) plus</p>
+<p>ground truth (target element ids, PII locations + placeholders,</p>
+<p>expected end states, face boxes, OCR text). The harness</p>
+<p>(`evals/sih-benchmark/run.py`) serves the fixtures over localhost</p>
+<p>and checks file presence, HTTP 200, element resolution, PII</p>
+<p>locations, and end states. The benchmark (`benchmark.py`) runs</p>
+<p>the real server loop over all twelve fixtures with a mock planner</p>
+<p>and produces the five SIH metrics. `score.py` maps the run into</p>
+<p>the score document with targets and the honesty note. No</p>
+<p>live-site testing happens until fixtures pass.</p>
+
+<h3>10.2 The five SIH metrics (run 2026-11-21 ~14:19 IST)</h3>
+
+<table>
+<tr><th>#</th><th>Metric</th><th>Measured</th><th>Target</th><th>Notes</th></tr>
+<tr><td>1</td><td>Visual grounding, first try</td><td>**100%** (18/18 executable steps; 2 human-only handoffs)</td><td>≥85%</td><td>Mock planner — measures the loop, not a live model</td></tr>
+<tr><td>2</td><td>PII recall / precision</td><td>**100% / 100%** (14 TP, 0 FP, 0 FN)</td><td>≥95% / ≥90%</td><td>Regex-detectable types only (see §10.3)</td></tr>
+<tr><td>3</td><td>Redaction, recoverable tokens</td><td>**0**</td><td>0</td><td>Second scan on every redacted payload</td></tr>
+<tr><td>4</td><td>Client resource use</td><td>**26.7 MB** models (budget 300 MB); RAM ≤500 MB</td><td>≤300 MB / ≤500 MB</td><td>Extension models on disk; RAM not yet measured live</td></tr>
+<tr><td>5</td><td>Latency p50</td><td>**0.001 s** (mock planner — loop overhead only)</td><td>≤6 s/step</td><td>Live planner latency unmeasured; honest expectation 4–8 s/step</td></tr>
+</table>
+
+<h3>10.3 Scope honesty</h3>
+
+<p>The headline PII recall/precision cover **regex-detectable types**</p>
+<p>(email, card, Aadhaar, PAN, phone, date). Label/field types</p>
+<p>(name, address, roll, CVV, OTP, password) are caught by field</p>
+<p>labels and reported separately; vision types (faces, scanned-doc</p>
+<p>text) are detected by BlazeFace and OCR and reported separately.</p>
+<p>They are not in the headline denominator, and the report does not</p>
+<p>present them as if they were. Grounding and latency were measured</p>
+<p>with a mock planner: they measure the loop, not a live model.</p>
+<p>The workspace, the proof API, and the deck all carry the same</p>
+<p>honesty note verbatim, so no number can drift into a claim it</p>
+<p>does not support.</p>
+
+<h3>10.4 Regression suite</h3>
+
+<table>
+<tr><th>Suite</th><th>Result (2026-11-21)</th></tr>
+<tr><td>Python unit + integration</td><td>235/235</td></tr>
+<tr><td>Extension Node tests</td><td>62/62</td></tr>
+<tr><td>Fixture harness (5 runs)</td><td>60/60</td></tr>
+<tr><td>Extension typecheck + build</td><td>clean</td></tr>
+</table>
+
+<p>Every bug fixed in review got a regression test. Notable</p>
+<p>catches: the scan overlap (a card number's first 12 digits</p>
+<p>matching Aadhaar), the checkout fill mismatch (`[CARD_LAST4]`</p>
+<p>vs `[CARD_NUMBER]`), the content-script fill function never</p>
+<p>being built in the live path, the wrong-resume attach (the</p>
+<p>newest matching file belonged to someone else), and the contains</p>
+<p>cooldown swallowing real changes.</p>
+
+<h3>10.5 What is not verified</h3>
+
+<p>- The planner has never run live against the real gateway from</p>
+<p>  the server. Live grounding + live step latency are unmeasured.</p>
+<p>- Florence-2 + onnxruntime-web WebGPU have not run in a real</p>
+<p>  Chrome. YOLO's classic `[1,84,8400]` branch is synthetic-only.</p>
+<p>- No live-site run (Internshala/LinkedIn job hunt, real</p>
+<p>  checkout) has been done. No real Gmail send through Eclipse</p>
+<p>  has been performed.</p>
+<p>- The extension WebCrypto vault is built and unit-tested but not</p>
+<p>  wired into the fill path.</p>
+<p>- Extension RAM during a task has not been measured live.</p>
+
+<hr/>
+
+<h2>11. Results and discussion</h2>
+
+<p>The system does what the problem statement asks on fixtures: it</p>
+<p>completes the job-hunt flow end to end, redacts everything the</p>
+<p>benchmark's ground truth marks as PII, fires watches and builds</p>
+<p>briefings, and records receipts and audit entries for every</p>
+<p>consequential step. The review feedback from 2026-11-20 — that</p>
+<p>the project was not complete, that every feature already existed,</p>
+<p>and that the architecture was not nice — was answered by</p>
+<p>rebuilding from scratch as Eclipse with the privacy pipeline as</p>
+<p>the architecture, not a feature: perception, redaction, gate,</p>
+<p>and proof are the load-bearing parts, and the demo is a real</p>
+<p>task (a job application) done privately, not a toy.</p>
+
+<p>The honest limits matter as much as the results. The 100%</p>
+<p>grounding number is a loop number, not a model number, and the</p>
+<p>report states that on every surface that shows it. The 0.001 s</p>
+<p>latency is loop overhead, not a step time; the real step time on</p>
+<p>free cloud models will be 4–8 s, which is acceptable (latency is</p>
+<p>15% of the score) but must be measured before the final review.</p>
+<p>The PII headline covers regex types; the label and vision types</p>
+<p>are real detections with real tests, but they are not folded</p>
+<p>into a single number the benchmark did not compute.</p>
+
+<p>The sharpest lesson from the build was that the review process</p>
+<p>caught real bugs the tests did not: a resume picker that would</p>
+<p>have attached another person's document, a fill path that was a</p>
+<p>TypeError in production, and a cooldown that silently swallowed</p>
+<p>changes. The test gate plus independent review-and-fix after</p>
+<p>each sprint is what makes the numbers in §10 trustworthy.</p>
+
+<hr/>
+
+<h2>12. Conclusion and future work</h2>
+
+<p>Eclipse is a complete, working, privacy-first browser agent:</p>
+<p>on-device perception, destructive redaction, a fail-closed gate,</p>
+<p>an open-weights planner, a guarded executor, a local vault,</p>
+<p>real connectors, live monitoring, and a proof surface that lets</p>
+<p>a reviewer verify the privacy claim. It was built in nine</p>
+<p>sprints with a test gate and a review pass after each one, and</p>
+<p>every number in this report comes from a real run with a date.</p>
+
+<p>Future work, in order:</p>
+
+<p>1. **Live planner measurement** — run the gateway planner</p>
+<p>   against the fixtures and record real grounding and step</p>
+<p>   latency; apply the §6.10 latency fixes if p50 exceeds 6 s.</p>
+<p>2. **Live-site runs** — Internshala/LinkedIn job hunt and a</p>
+<p>   real checkout, with the demo recording as the fallback.</p>
+<p>3. **Florence-2 live verification** — one grounding call on the</p>
+<p>   demo laptop's WebGPU, then the onnxruntime-web WebGPU path.</p>
+<p>4. **Wire the extension WebCrypto vault** into the fill path so</p>
+<p>   the fill map no longer travels in the execute response.</p>
+<p>5. **Firefox** — Chrome only for now; one line in the TBP report</p>
+<p>   as future work (this line).</p>
+<p>6. **Multi-user isolation** — the vault, memory, preferences,</p>
+<p>   and live stream are currently global; scope them per user.</p>
+
+<hr/>
+
+<h2>13. Team roles</h2>
+
+<table>
+<tr><th>Name</th><th>Roll</th><th>Contribution</th></tr>
+<tr><td>Akash Goud Sidduluri</td><td>1602-24-737-066</td><td>Project lead, architecture, planner + executor, vault, connectors, monitoring, workspace, report</td></tr>
+<tr><td>Ashish Kumar</td><td>1602-24-737-073</td><td>SIH team member (contribution to be confirmed — left blank rather than invented)</td></tr>
+<tr><td>Mahesh Vallabhu</td><td>1602-24-737-084</td><td>SIH team member (contribution to be confirmed — left blank rather than invented)</td></tr>
+<tr><td>Dr. B Kezia Rani</td><td>—</td><td>Team guide</td></tr>
+</table>
+
+<p>Only real names and real contributions are listed. Nothing is</p>
+<p>invented; what is unknown is left blank.</p>
+
+<hr/>
+
+<h2>14. References</h2>
+
+<p>1. Eclipse repository. https://github.com/akashgoudsidduluri/eclipse</p>
+<p>2. SIH 26171 problem statement: On-device Visual Perception for</p>
+<p>   Light-weight Browser Agents (ISRO).</p>
+<p>3. Ultralytics YOLO26. https://docs.ultralytics.com</p>
+<p>4. PaddleOCR / PP-OCRv4 (via rapidocr-onnxruntime 1.4.4).</p>
+<p>5. BlazeFace (garavv/blazeface-onnx, Hugging Face).</p>
+<p>6. Florence-2 (onnx-community/Florence-2-base-ft, via</p>
+<p>   @xenova/transformers).</p>
+<p>7. ONNX Runtime Web. https://onnxruntime.ai/docs/get-started/with-javascript.html</p>
+<p>8. WebGPU report. https://webgpureport.org</p>
+<p>9. sqlite-vec. https://github.com/asg017/sqlite-vec</p>
+<p>10. sentence-transformers / all-MiniLM-L6-v2 (Hugging Face).</p>
+<p>11. Antseed gateway (team's own, akash-antseed.duckdns.org) —</p>
+<p>    verified free open-weights models, probed live 2026-11-21.</p>
+<p>12. Google Workspace CLI (hatch_gws_cli) — Gmail, Calendar,</p>
+<p>    Drive access for the connectors.</p>
+
+<hr/>
+
+<p>*End of report. All metrics are from the benchmark run of</p>
+<p>2026-11-21 ~14:19 IST unless stated otherwise. Where a number is</p>
+<p>not yet measured, this report says so.*</p>
+
+<hr/>
+
+<h2>Appendix A. API reference (all routes token-gated)</h2>
+
+<p>**System:** `GET /health`, `GET /metrics`, `GET /quota`.</p>
+<p>**Audit:** `GET /audit`, `GET /audit/verify`, `GET /audit/export`.</p>
+<p>**Tasks:** `POST /tasks`, `GET /tasks`, `GET /tasks/{id}`,</p>
+<p>`POST /tasks/{id}/plan`, `POST /tasks/{id}/steps/{n}/execute`,</p>
+<p>`POST /tasks/{id}/steps/{n}/verify`, `POST /tasks/{id}/approve`,</p>
+<p>`POST /tasks/{id}/cancel|pause|resume`, `DELETE /tasks/{id}/grants`,</p>
+<p>`POST /tasks/{id}/receipts`, `GET /tasks/{id}/receipts`.</p>
+<p>**Jobs:** `POST /jobs/profile`, `GET /jobs/profile`,</p>
+<p>`POST /jobs/match`, `GET /jobs/applied`.</p>
+<p>**Vault:** `POST /vault/create|unlock|lock|fill|revoke-all`,</p>
+<p>`POST /vault/store-password`, `GET /vault/status`.</p>
+<p>**Mail:** `POST /mail/drafts`, `GET /mail/drafts`,</p>
+<p>`POST /mail/drafts/{id}/approve`, `PATCH /mail/drafts/{id}`,</p>
+<p>`POST /mail/drafts/{id}/send`, `GET /mail/log`,</p>
+<p>`POST /mail/bounce-check`.</p>
+<p>**Memory / RAG:** `POST /memory/facts`, `GET /memory/facts`,</p>
+<p>`POST /rag/index`, `GET /rag/query`, `DELETE /rag/{id}`,</p>
+<p>`GET /rag/status`.</p>
+<p>**Proof:** `GET /proof` (page), `GET /proof/metrics`,</p>
+<p>`GET /proof/what-was-sent`, `GET /proof/egress`,</p>
+<p>`GET /proof/redaction`, `GET /proof/latency`.</p>
+<p>**Connectors:** `GET /connectors`, `GET /connectors/{name}/status`,</p>
+<p>`POST /connectors/{name}/enable|disable`,</p>
+<p>`POST /connectors/approvals`,</p>
+<p>`GET /connectors/gmail/offers`,</p>
+<p>`GET /connectors/calendar/freebusy`,</p>
+<p>`POST /connectors/calendar/events`,</p>
+<p>`GET /connectors/drive/resume`, `POST /connectors/drive/upload`.</p>
+<p>**Monitor:** `POST /monitor/watches`, `GET /monitor/watches`,</p>
+<p>`GET /monitor/watches/{id}`, `PATCH /monitor/watches/{id}`,</p>
+<p>`POST /monitor/watches/{id}/mute|unmute`,</p>
+<p>`DELETE /monitor/watches/{id}`, `GET /monitor/due`,</p>
+<p>`POST /monitor/watches/{id}/check`, `GET /monitor/events`,</p>
+<p>`POST /monitor/briefing`, `GET /monitor/briefing/latest`.</p>
+<p>**Workspace:** `GET /workspace/` (static app, no token to load).</p>
+
+<h2>Appendix B. Fixtures and ground truth</h2>
+
+<table>
+<tr><th>Fixture</th><th>Target</th><th>PII</th><th>End state</th></tr>
+<tr><td>login</td><td>email + password fields</td><td>email, password</td><td>logged in</td></tr>
+<tr><td>job-listing</td><td>5 matching roles of 12</td><td>none</td><td>shortlist</td></tr>
+<tr><td>application-form</td><td>name, email, phone, roll</td><td>name, email, phone, roll</td><td>submitted</td></tr>
+<tr><td>checkout</td><td>card, CVV, OTP, pay</td><td>card, CVV, OTP</td><td>confirmation</td></tr>
+<tr><td>inbox</td><td>3 offer mails of 20</td><td>emails in bodies</td><td>offers listed</td></tr>
+<tr><td>result-portal</td><td>result status</td><td>none</td><td>status read</td></tr>
+<tr><td>scanned-doc</td><td>OCR 6 lines</td><td>name, email, phone, roll</td><td>text extracted</td></tr>
+<tr><td>hidden-fields</td><td>hidden previous email</td><td>2 emails</td><td>both redacted</td></tr>
+<tr><td>faces</td><td>2 photos, 3 faces</td><td>3 face boxes</td><td>faces blacked out</td></tr>
+<tr><td>pii-text</td><td>7 PII items + 2 safe</td><td>name, email, phone, Aadhaar, PAN, address, DOB</td><td>all redacted</td></tr>
+<tr><td>captcha</td><td>handoff action</td><td>none</td><td>human-only</td></tr>
+<tr><td>broken-selector</td><td>element deliberately absent</td><td>none</td><td>harness asserts absence</td></tr>
+</table>
+
+<h2>Appendix C. Review log (what the review passes caught)</h2>
+
+<table>
+<tr><th>Sprint</th><th>Review verdict</th><th>Sharpest finding</th><th>Fixed</th></tr>
+<tr><td>1</td><td>—</td><td>(no review pass; fixtures + harness)</td><td>—</td></tr>
+<tr><td>2</td><td>BLOCK</td><td>Name-next-to-email leak; bare roll unredacted</td><td>yes</td></tr>
+<tr><td>3</td><td>BLOCK</td><td>Server PII scan missing; verify had no baseline</td><td>yes</td></tr>
+<tr><td>4</td><td>BLOCK</td><td>Fingerprint dead in the live path; already-applied unenforced</td><td>yes</td></tr>
+<tr><td>5</td><td>BLOCK (×2)</td><td>Fill function never built in the live path (TypeError); `[CARD_LAST4]` mismatch; mail approval filled a card</td><td>yes</td></tr>
+<tr><td>6</td><td>BLOCK (×2)</td><td>Unescaped innerHTML (XSS) in the proof page; fresh-clone test failure</td><td>yes</td></tr>
+<tr><td>7</td><td>BLOCK</td><td>Resume picker would have attached another person's file</td><td>yes</td></tr>
+<tr><td>8</td><td>BLOCK</td><td>Contains cooldown swallowed real changes; mute never expired; wrong-tab matching</td><td>yes</td></tr>
+<tr><td>9</td><td>(this sprint)</td><td>Workspace + report + decks + docs</td><td>—</td></tr>
+</table>
+
+<p>Every finding above has a regression test. The full gate after</p>
+<p>each fix pass was green before the push (Python 235/235, Node</p>
+<p>62/62, harness 60/60 at the latest run).</p>
+</body></html>

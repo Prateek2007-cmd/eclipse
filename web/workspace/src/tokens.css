@@ -1,0 +1,127 @@
+/* Eclipse design tokens (§5.1, §5.8 step 1). Every component
+ * reads from these variables. No hardcoded colors elsewhere.
+ * 60/30/10 dark: background #070B12, surfaces #12212B, accent
+ * #FF6B35 only on the primary action, a firing watch, and the
+ * current stage. Body text is never orange. */
+:root {
+  --bg: #070b12;
+  --bg-raised: #0b111c;
+  --surface: #12212b;
+  --surface-hover: #162b38;
+  --border: #1e3a4a;
+  --accent: #ff6b35;
+  --accent-ink: #1a0d05;
+  --text: #e8f0f2;
+  --text-secondary: #9fb3bc;
+  /* Sprint 9 fix (review M21): #6b8290 on surface was 4.08:1,
+   * below WCAG AA 4.5:1. #7e97a3 clears it. */
+  --text-muted: #7e97a3;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --radius-card: 8px;
+  --radius-panel: 12px;
+  --radius-pill: 999px;
+  /* Sprint 9 fix (review M19): the webfont names (Inter, Sora,
+   * IBM Plex Mono) were declared but never loaded — headings
+   * rendered system fallbacks anyway. The workspace is
+   * local-first and makes no third-party requests, so the stacks
+   * are system fonts by design, not by accident. */
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", monospace;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
+  color-scheme: dark;
+}
+
+h1, h2, h3 { font-family: var(--font-display); margin: 0; }
+h1 { font-size: 20px; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; }
+
+button, input, textarea, select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: var(--space-2) var(--space-3);
+  /* Sprint 9 fix (review M20): plan §5.8 requires 150–250ms
+   * ease-out for state changes. */
+  transition: background-color 200ms ease-out, border-color 200ms ease-out, filter 200ms ease-out, opacity 200ms ease-out;
+}
+button:hover { background: var(--surface-hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+button.primary:hover { filter: brightness(1.08); }
+
+a { color: var(--info); }
+
+/* Visible 2px focus ring in accent on every interactive element. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input, textarea, select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-2) var(--space-3);
+  width: 100%;
+}
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-muted); }
+.secondary { color: var(--text-secondary); }
+.success { color: var(--success); }
+.warning { color: var(--warning); }
+.danger { color: var(--danger); }
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0 0 var(--radius-card) 0;
+  z-index: 100;
+}
+.skip-link:focus { left: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

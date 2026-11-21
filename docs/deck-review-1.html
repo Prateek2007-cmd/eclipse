@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Eclipse — Review I: Problem, Design, Progress</title>
+<style>
+  :root { --bg:#070B12; --panel:#0B111C; --surface:#12212B; --border:#1E3A4A; --accent:#FF6B35; --text:#E8F0F2; --muted:#9FB3BC; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: Inter, system-ui, sans-serif; }
+  .deck { max-width: 960px; margin: 0 auto; padding: 32px; }
+  .slide { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding: 48px; margin-bottom: 32px; min-height: 420px; }
+  .slide h1 { font-size: 36px; margin: 0 0 16px; font-family: Sora, sans-serif; }
+  .slide h2 { font-size: 28px; margin: 0 0 16px; font-family: Sora, sans-serif; }
+  .slide p, .slide li { font-size: 18px; line-height: 1.6; color: var(--muted); }
+  .slide p strong, .slide li strong { color: var(--text); }
+  .slide .num { color: var(--accent); font-family: monospace; font-size: 14px; }
+  .slide ul { padding-left: 24px; }
+  .accent { color: var(--accent); }
+  @media print { .slide { page-break-after: always; margin: 0; border: none; } }
+</style>
+</head>
+<body>
+<div class="deck">
+
+<section class="slide">
+  <p class="num">ECLIPSE · SIH 26171 · REVIEW I</p>
+  <h1>Eclipse</h1>
+  <p><strong>The browser agent that sees for you — and eclipses what no one else should see.</strong></p>
+  <p>Akash Goud Sidduluri · Ashish Kumar · Mahesh Vallabhu<br>Guide: Dr. B Kezia Rani · Vasavi College of Engineering</p>
+</section>
+
+<section class="slide">
+  <p class="num">01 · THE PROBLEM</p>
+  <h2>Every browser agent ships your page to the cloud</h2>
+  <ul>
+    <li>A job portal, an inbox, a checkout — the pages an agent works on are <strong>personal by definition</strong>.</li>
+    <li>Today's agents send a screenshot or a DOM dump to a remote model <strong>before any privacy decision is made</strong>.</li>
+    <li>The user cannot see what left, cannot take it back, and gets <strong>no proof</strong> of what was redacted.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">02 · THE IDEA</p>
+  <h2>Privacy as a pipeline, not a policy</h2>
+  <ul>
+    <li><strong>Observe locally</strong> — DOM, accessibility tree, YOLO, OCR, faces, Florence-2, all on-device.</li>
+    <li><strong>Redact locally</strong> — destructively, with placeholders. A fail-closed gate blocks dirty steps.</li>
+    <li><strong>Plan in the cloud</strong> — open-weights models only, on the redacted observation.</li>
+    <li><strong>Prove it</strong> — what was sent, egress audit, redaction proof, hash-chained audit log.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">03 · ARCHITECTURE</p>
+  <h2>Three parts, one rule</h2>
+  <ul>
+    <li><strong>Extension</strong> (Chrome MV3): perception + guarded execution. Never writes the database.</li>
+    <li><strong>Server</strong> (FastAPI, 127.0.0.1 only): planning, state, vault, proof. The only writer.</li>
+    <li><strong>Planner</strong>: open-weights only (Gemma, Nemotron, Mistral, GPT-OSS) via our own gateway.</li>
+    <li>Page text is <strong>untrusted data</strong> at both planner and executor.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">04 · THE PIPELINE</p>
+  <h2>One step, nine stages</h2>
+  <p>Observe → Detect → Redact → Gate → Second scan → Plan → Execute → Verify → Checkpoint + log.</p>
+  <ul>
+    <li>Planner input capped at 8K tokens; history summarised at checkpoints.</li>
+    <li>Max 25 steps/task, 3 retries/step, 3 planner calls/step.</li>
+    <li>Never retry a submit, charge, or send.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">05 · PROGRESS SO FAR</p>
+  <h2>Built in sprints, gated by tests</h2>
+  <ul>
+    <li><strong>Sprints 0–1:</strong> start blocks green (11/11 connectors, WebGPU proven), fixtures + harness.</li>
+    <li><strong>Sprint 2:</strong> vision cascade + redactor + fail-closed gate.</li>
+    <li><strong>Sprint 3:</strong> planner router + guarded executor + verify-by-re-observing.</li>
+    <li><strong>Sprint 4:</strong> job hunt end to end — shortlist, fill, approval, receipts.</li>
+    <li><strong>Sprint 5:</strong> vault + cold mail + checkout.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">06 · WHAT'S NEXT</p>
+  <h2>After Review I</h2>
+  <ul>
+    <li><strong>Sprint 6:</strong> RAG + benchmark + proof views.</li>
+    <li><strong>Sprint 7:</strong> connectors Gmail → Calendar → Drive.</li>
+    <li><strong>Sprint 8:</strong> live monitoring — watches + morning briefing.</li>
+    <li><strong>Sprint 9:</strong> workspace, 3D Privacy Boundary, demo + TBP deliverables.</li>
+  </ul>
+  <p class="accent">Every sprint ends with a test gate and an independent review-and-fix pass. Nothing ships unverified.</p>
+</section>
+
+</div>
+</body>
+</html>

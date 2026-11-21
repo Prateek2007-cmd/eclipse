@@ -180,6 +180,16 @@ class TestProofApi(unittest.TestCase):
         self.assertIsNotNone(doc["metrics"])
         self.assertEqual(doc["fixtures"], 12)
         self.assertEqual(doc["metrics"]["redaction_recoverable_tokens"], 0)
+        # Sprint 9 fix (review B4/B5): the workspace client maps
+        # these server keys — they must exist with these names.
+        self.assertIn("visual_grounding_first_try", doc["metrics"])
+        self.assertIn("generated_at", doc)
+        code, body = self._request("GET", "/proof/latency")
+        self.assertEqual(code, 200)
+        doc = json.loads(body)
+        self.assertIn("step_time_s", doc)
+        self.assertIn("p50", doc["step_time_s"])
+        self.assertIn("latency_target_s", doc)
 
     def test_egress_and_redaction_and_latency(self):
         code, body = self._request("GET", "/proof/egress")

@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/colors.ts","./src/main.tsx","./src/components/BoundaryScene.tsx","./src/components/ProofPane.tsx","./src/components/TaskPane.tsx","./src/components/TracePane.tsx","./src/components/WatchPanel.tsx","./vite.config.ts"],"version":"5.9.3"}

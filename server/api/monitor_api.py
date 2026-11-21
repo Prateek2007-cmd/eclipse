@@ -185,6 +185,9 @@ def repair_watch(watch_id: str, body: RepairIn,
         return watch
     finally:
         conn.close()
+
+
+@router.delete("/monitor/watches/{watch_id}")
 def delete_watch(watch_id: str, _token: str = Depends(require_token)):
     conn = _conn()
     try:

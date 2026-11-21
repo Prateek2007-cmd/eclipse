@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Eclipse — Review II: Implementation, Results, Live Demo</title>
+<style>
+  :root { --bg:#070B12; --panel:#0B111C; --surface:#12212B; --border:#1E3A4A; --accent:#FF6B35; --text:#E8F0F2; --muted:#9FB3BC; --green:#34D399; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: Inter, system-ui, sans-serif; }
+  .deck { max-width: 960px; margin: 0 auto; padding: 32px; }
+  .slide { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding: 48px; margin-bottom: 32px; min-height: 420px; }
+  .slide h1 { font-size: 36px; margin: 0 0 16px; font-family: Sora, sans-serif; }
+  .slide h2 { font-size: 28px; margin: 0 0 16px; font-family: Sora, sans-serif; }
+  .slide p, .slide li { font-size: 18px; line-height: 1.6; color: var(--muted); }
+  .slide p strong, .slide li strong { color: var(--text); }
+  .slide .num { color: var(--accent); font-family: monospace; font-size: 14px; }
+  .slide ul { padding-left: 24px; }
+  .slide table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+  .slide th, .slide td { border: 1px solid var(--border); padding: 10px 12px; text-align: left; font-size: 16px; }
+  .slide th { color: var(--text); }
+  .accent { color: var(--accent); }
+  .green { color: var(--green); }
+  @media print { .slide { page-break-after: always; margin: 0; border: none; } }
+</style>
+</head>
+<body>
+<div class="deck">
+
+<section class="slide">
+  <p class="num">ECLIPSE · SIH 26171 · REVIEW II</p>
+  <h1>Eclipse</h1>
+  <p><strong>Built. Tested. Reviewed. Nine sprints, every one gated.</strong></p>
+  <p>Akash Goud Sidduluri · Ashish Kumar · Mahesh Vallabhu<br>Guide: Dr. B Kezia Rani · Vasavi College of Engineering</p>
+</section>
+
+<section class="slide">
+  <p class="num">01 · WHAT WAS BUILT</p>
+  <h2>Nine sprints, one system</h2>
+  <ul>
+    <li><strong>Vision:</strong> DOM + AX walker, YOLO26n, PP-OCRv4, BlazeFace, Florence-2 (lazy, WebGPU).</li>
+    <li><strong>Privacy:</strong> redactor, fail-closed gate, second PII scan, egress allow-list, Fernet vault.</li>
+    <li><strong>Agent:</strong> open-weights planner router, guarded executor, verify-by-re-observing.</li>
+    <li><strong>Product:</strong> job hunt, cold mail, checkout, Gmail/Calendar/Drive, watches + briefing, workspace.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">02 · SIH METRICS — REAL NUMBERS</p>
+  <h2>Benchmark run, 2026-11-21</h2>
+  <table>
+    <tr><th>Metric</th><th>Measured</th><th>Target</th></tr>
+    <tr><td>Visual grounding, first try</td><td>100% (18/18)</td><td>≥85%</td></tr>
+    <tr><td>PII recall / precision</td><td>100% / 100%</td><td>≥95% / ≥90%</td></tr>
+    <tr><td>Recoverable tokens</td><td>0</td><td>0</td></tr>
+    <tr><td>Extension models</td><td>26.7 MB</td><td>≤300 MB</td></tr>
+    <tr><td>Latency p50</td><td>0.001 s</td><td>≤6 s/step</td></tr>
+  </table>
+  <p><strong>Honesty note:</strong> grounding and latency were measured with a mock planner — they measure the loop, not a live model. Live planner latency is unmeasured; honest expectation 4–8 s/step.</p>
+</section>
+
+<section class="slide">
+  <p class="num">03 · THE GATE</p>
+  <h2>Every sprint, the same bar</h2>
+  <ul>
+    <li><strong>Python:</strong> 235/235 · <strong>Node:</strong> 62/62 · <strong>Harness:</strong> 60/60 · typecheck + build clean.</li>
+    <li>Every sprint ended with an independent review (backend, frontend, verifier) and a fix pass.</li>
+    <li>The reviews caught real bugs: a resume picker that would have attached someone else's file, a fill path that was a TypeError in production, a cooldown that swallowed real changes.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">04 · PRIVACY, PROVEN</p>
+  <h2>What a judge can check</h2>
+  <ul>
+    <li><strong>What was sent:</strong> every outbound payload, redacted, with timestamp, endpoint, token count.</li>
+    <li><strong>Egress audit:</strong> live grep of outbound requests — 0 hits, pattern listed.</li>
+    <li><strong>Redaction proof:</strong> second scan finds 0 recoverable tokens.</li>
+    <li><strong>Audit log:</strong> hash-chained, verifiable. It proves tampering after the fact — it does not prevent it, and we say so.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">05 · LIVE DEMO</p>
+  <h2>The job hunt, end to end</h2>
+  <ul>
+    <li>Find SDE internships → shortlist 5 matching roles → fill the application → approve → receipt.</li>
+    <li>Diff view: redacted payloads with placeholder tokens highlighted, plus the PII types removed — and the honest note that no raw side exists, because raw PII is never stored.</li>
+    <li>Watch firing on the result portal + the morning briefing.</li>
+    <li>Rule: one retry live, then play the recording and say so. Never debug live.</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <p class="num">06 · LIMITS, STATED PLAINLY</p>
+  <h2>What is not verified yet</h2>
+  <ul>
+    <li>Live planner grounding + live step latency (needs a real gateway run).</li>
+    <li>Florence-2 + onnxruntime-web WebGPU in a real Chrome.</li>
+    <li>Live-site run (Internshala/LinkedIn), real Gmail send, real checkout.</li>
+    <li>Extension RAM during a task has not been measured live.</li>
+  </ul>
+  <p class="accent">These are next. The system is honest about them today.</p>
+</section>
+
+</div>
+</body>
+</html>

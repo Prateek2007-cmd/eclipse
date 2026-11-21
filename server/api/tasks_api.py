@@ -80,14 +80,25 @@ def get_task(task_id: str, _token: str = Depends(require_token)):
     task = _task_or_404(task_id)
     conn = _conn()
     try:
-        steps = [
-            dict(r)
-            for r in conn.execute(
-                "SELECT n, action_json, status, element_id, result, error, retries"
-                " FROM steps WHERE task_id = ? ORDER BY n",
-                (task_id,),
-            ).fetchall()
-        ]
+        steps = []
+        for r in conn.execute(
+            "SELECT n, action_json, status, element_id, result, error, retries"
+            " FROM steps WHERE task_id = ? ORDER BY n",
+            (task_id,),
+        ).fetchall():
+            row = dict(r)
+            # Sprint 9 fix (review B3): the steps table has no
+            # description column — the description lives inside
+            # action_json. Flatten it so clients can render the
+            # plan without parsing JSON themselves.
+            try:
+                row["description"] = (
+                    json.loads(row.get("action_json") or "{}").get("description")
+                    or ""
+                )
+            except (ValueError, TypeError):
+                row["description"] = ""
+            steps.append(row)
         checkpoints = [
             dict(r)
             for r in conn.execute(

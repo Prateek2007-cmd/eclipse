@@ -47,7 +47,10 @@ def _latest_benchmark() -> dict | None:
 
 @router.get("", include_in_schema=False)
 def proof_page():
-    """The proof page (static HTML)."""
+    """The proof page (static HTML).
+
+    Intentionally public: the page holds no data — every data
+    endpoint it calls is token-gated. (Review M6, Sprint 9.)"""
     page = WEB_DIR / "proof.html"
     if not page.exists():
         return {"error": "proof page not built yet"}
@@ -59,8 +62,25 @@ def metrics(_: str = Depends(require_token)):
     """The 5 SIH metrics from the latest benchmark run."""
     bench = _latest_benchmark()
     if bench is None:
+        # Sprint 9 fix (review M10): always return the full key
+        # set so clients can read the fields they type as
+        # required — null, not missing.
         return {
             "metrics": None,
+            "targets": {
+                "visual_grounding_first_try": 0.85,
+                "pii_recall": 0.95,
+                "pii_precision": 0.90,
+                "redaction_recoverable_tokens": 0,
+                "resource_mb": 300,
+                "latency_p50_s": 6,
+            },
+            "honesty": "",
+            "run_date": None,
+            "generated_at": None,
+            "fixtures": None,
+            "worst_page": None,
+            "worst_pii_fixture": None,
             "reason": "no benchmark run yet — run evals/sih-benchmark/benchmark.py",
         }
     detail = bench.get("detail", {})
@@ -126,8 +146,15 @@ def redaction(_: str = Depends(require_token)):
     """Redaction proof from the latest benchmark run."""
     bench = _latest_benchmark()
     if bench is None:
+        # Sprint 9 fix (review M10): full key set, nulls not missing.
         return {
+            "generated_at": None,
+            "recoverable_tokens": None,
             "passed": None,
+            "pii_recall": None,
+            "pii_precision": None,
+            "per_fixture": None,
+            "label_based_not_regex": {},
             "reason": "no benchmark run yet — run evals/sih-benchmark/benchmark.py",
         }
     detail = bench.get("detail", {})
@@ -160,7 +187,14 @@ def latency(_: str = Depends(require_token)):
     bench = _latest_benchmark()
     if bench is None:
         return {
+            "generated_at": None,
             "step_time_s": None,
+            "latency_target_s": None,
+            "p50_within_target": None,
+            "worst_fixture": None,
+            "worst_fixture_s": None,
+            "per_fixture": None,
+            "planner": None,
             "reason": "no benchmark run yet — run evals/sih-benchmark/benchmark.py",
         }
     loop_detail = bench.get("detail", {}).get("loop", {})

@@ -417,6 +417,33 @@ class TestTasksApi(unittest.TestCase):
         self.assertEqual(body["steps"], [])
         self.assertEqual(body["checkpoints"], [])
 
+    def test_get_task_flattens_step_description(self):
+        # Sprint 9 fix (review B3): the steps table has no
+        # description column — it lives inside action_json. The
+        # GET /tasks/{id} response must carry a real description
+        # per step, or the workspace renders "Step N: " blank.
+        import json as _json
+        import sqlite3 as _sqlite3
+
+        status, body = _request(self.base, "POST", "/tasks",
+                                body={"goal": "Apply to Acme Tech"})
+        self.assertEqual(status, 201, body)
+        task_id = body["id"]
+        conn = _sqlite3.connect(f"{self.tmp.name}/eclipse.db")
+        conn.execute(
+            "INSERT INTO steps (task_id, n, action_json, status, result, retries)"
+            " VALUES (?, 1, ?, 'done', 'ok', 0)",
+            (task_id, _json.dumps({"action": "click", "element_id": "el_apply_1",
+                                   "description": "Click the Acme Tech apply button"})),
+        )
+        conn.commit()
+        conn.close()
+        status, body = _request(self.base, "GET", f"/tasks/{task_id}")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(body["steps"]), 1)
+        self.assertEqual(body["steps"][0]["description"],
+                         "Click the Acme Tech apply button")
+
     def test_tasks_require_token(self):
         status, _ = _request(self.base, "POST", "/tasks",
                              body={"goal": "x"}, token=None)

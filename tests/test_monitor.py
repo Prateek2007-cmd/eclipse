@@ -477,6 +477,26 @@ class TestMonitorApi(unittest.TestCase):
         status, _ = _request(self.base, "GET", "/monitor/watches/w_nope")
         self.assertEqual(status, 404)
 
+    def test_delete_watch_route_exists(self):
+        # Sprint 9 fix (review M7): delete_watch had no
+        # @router.delete decorator — the function existed but
+        # the route did not, so DELETE returned 405.
+        status, body = _request(self.base, "POST", "/monitor/watches", {
+            "url": "http://localhost/x", "selector": "#s",
+            "condition": "changed", "interval_min": 15,
+        })
+        self.assertEqual(status, 200, body)
+        watch_id = body["id"]
+        status, body = _request(
+            self.base, "DELETE", f"/monitor/watches/{watch_id}")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["deleted"], watch_id)
+        status, _ = _request(self.base, "GET", f"/monitor/watches/{watch_id}")
+        self.assertEqual(status, 404)
+        status, _ = _request(
+            self.base, "DELETE", f"/monitor/watches/{watch_id}")
+        self.assertEqual(status, 404)
+
     def test_bad_url_rejected(self):
         status, body = _request(self.base, "POST", "/monitor/watches", {
             "url": "not a url", "selector": "#s",

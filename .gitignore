@@ -18,3 +18,5 @@ server/rag/models/*
 extension/node_modules/
 extension/dist/
 extension/tests-dist/
+# Workspace: dependencies (install with `npm install` in web/workspace)
+web/workspace/node_modules/

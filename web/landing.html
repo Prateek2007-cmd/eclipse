@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Eclipse — The browser agent that sees for you</title>
+<style>
+  :root { --bg:#070B12; --panel:#0B111C; --surface:#12212B; --border:#1E3A4A; --accent:#FF6B35; --text:#E8F0F2; --muted:#9FB3BC; --green:#34D399; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family: Inter, system-ui, sans-serif; line-height:1.6; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 64px; }
+  header { padding: 96px 0 64px; }
+  h1 { font-size: 48px; line-height: 1.1; margin: 0 0 16px; font-family: Sora, sans-serif; }
+  h2 { font-size: 28px; margin: 64px 0 16px; font-family: Sora, sans-serif; }
+  p, li { color: var(--muted); font-size: 18px; }
+  p strong, li strong { color: var(--text); }
+  .tagline { font-size: 22px; color: var(--text); }
+  .cta { display:inline-block; background:var(--accent); color:#1a0d05; font-weight:600; border-radius:8px; padding:12px 24px; text-decoration:none; margin-top:24px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:24px; margin:16px 0; }
+  .metrics { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:16px; }
+  .metric { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  .metric b { display:block; font-size:32px; font-family:Sora, sans-serif; color:var(--text); }
+  .metric span { color:var(--muted); font-size:14px; }
+  .before, .after { font-family: monospace; font-size: 15px; background: var(--surface); border-radius: 8px; padding: 16px; overflow-x: auto; }
+  .before s { color: #f87171; }
+  .after b { color: var(--green); }
+  .skip-link { position:absolute; left:-9999px; top:0; background:var(--accent); color:#1a0d05; padding:8px 12px; border-radius:0 0 8px 0; z-index:100; }
+  .skip-link:focus { left:0; }
+  footer { color: var(--muted); font-size: 14px; margin-top: 64px; }
+  details { background: var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px 24px; margin:12px 0; }
+  summary { cursor:pointer; font-weight:600; color:var(--text); }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to main content</a>
+<div class="wrap">
+<header>
+  <h1>Eclipse</h1>
+  <p class="tagline">The browser agent that sees for you — and eclipses what no one else should see.</p>
+  <p>A privacy-first browser agent. It perceives the page on your device, redacts your personal data on your device, and only then asks the cloud what to do — with the redacted version only.</p>
+  <a class="cta" href="#how">See how privacy works</a>
+</header>
+<main id="main">
+
+<h2 id="how">How it works</h2>
+<div class="card"><p><strong>1. Observe locally.</strong> The extension walks the DOM and accessibility tree, and runs YOLO, OCR, and face detection on-device. Florence-2 phrase grounding on WebGPU is built and is being verified on the demo laptop — it has not run in a real Chrome yet.</p></div>
+<div class="card"><p><strong>2. Redact locally.</strong> Names, emails, cards, faces are detected and blacked out or replaced with placeholders. A fail-closed gate blocks any step that still contains personal data.</p></div>
+<div class="card"><p><strong>3. Plan in the cloud.</strong> An open-weights model plans the next step from the redacted observation only. The executor verifies every action by re-observing the page.</p></div>
+
+<h2>Privacy in code</h2>
+<p>What the agent saw:</p>
+<pre class="before">Name: <s>Test User</s> · Email: <s>test.user@example.com</s> · Card: <s>4111 1111 1111 1111</s></pre>
+<p>What the cloud got:</p>
+<pre class="after">Name: <b>[NAME_1]</b> · Email: <b>[EMAIL_1]</b> · Card: <b>[CARD_LAST4]</b></pre>
+<p>Card numbers, CVV, passwords, and OTPs never reach the planner, the logs, or the cloud. They are filled locally from an encrypted vault, after your approval.</p>
+
+<h2>SIH metrics — real numbers only</h2>
+<p>Benchmark run 2026-11-21, 12 fixture pages. Grounding and latency measured with a mock planner — they measure the loop, not a live model.</p>
+<div class="metrics">
+  <div class="metric"><b>100%</b><span>Grounding, first try (18/18)</span></div>
+  <div class="metric"><b>100%</b><span>PII recall / precision</span></div>
+  <div class="metric"><b>0</b><span>Recoverable tokens</span></div>
+  <div class="metric"><b>26.7 MB</b><span>Extension models (≤300 MB)</span></div>
+  <div class="metric"><b>0.001 s</b><span>Latency p50 (mock planner — loop overhead only)</span></div>
+  <div class="metric"><b>235/235</b><span>Python tests · 62/62 Node · 60/60 harness</span></div>
+</div>
+
+<h2>FAQ</h2>
+<details><summary>Does Eclipse send my data to the cloud?</summary><p>Only the redacted observation. Raw personal data is redacted on-device before any cloud call, and a second scan runs before the planner sees anything.</p></details>
+<details><summary>Which models plan the actions?</summary><p>Open-weights models only (Gemma, Nemotron, Mistral) through our own gateway. GPT-OSS was dropped as a planner after repeated empty responses. Proprietary models are never the runtime planner.</p></details>
+<details><summary>What happens when it hits a CAPTCHA?</summary><p>It pauses, saves a checkpoint, and asks you. CAPTCHA, 3-D Secure, passkeys, and OTPs are human-only — no solver is built.</p></details>
+<details><summary>Can I check what it did?</summary><p>Yes: what-was-sent, egress audit, redaction proof, and a hash-chained audit log you can verify. The hash chain proves tampering after the fact; it does not prevent it.</p></details>
+
+<footer>
+  Eclipse · SIH 26171 · Built by Akash Goud Sidduluri, Ashish Kumar, Mahesh Vallabhu · Guide: Dr. B Kezia Rani · <a href="https://github.com/akashgoudsidduluri/eclipse">github.com/akashgoudsidduluri/eclipse</a>
+</footer>
+</main>
+</div>
+</body>
+</html>
