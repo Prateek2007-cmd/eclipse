@@ -2,6 +2,10 @@
 
 POST /memory/facts  {text, source?, topic?}  -> 201 {id}
 GET  /memory/facts?query=...&limit=5          -> {facts: [...]}
+DELETE /memory/facts/{fact_id}                -> {ok, id} (404 when absent)
+
+There is no list-all endpoint: facts are recalled by keyword
+query only, never dumped.
 """
 from __future__ import annotations
 
@@ -43,3 +47,16 @@ def recall_facts(
     finally:
         conn.close()
     return {"facts": facts}
+
+
+@router.delete("/memory/facts/{fact_id}")
+def delete_fact(fact_id: str, _token: str = Depends(require_token)):
+    """Forget one fact (404 when it does not exist)."""
+    conn = db.connect()
+    try:
+        forgotten = keyword.delete_fact(conn, fact_id)
+    finally:
+        conn.close()
+    if not forgotten:
+        raise HTTPException(status_code=404, detail=f"no fact {fact_id}")
+    return {"ok": True, "id": fact_id}

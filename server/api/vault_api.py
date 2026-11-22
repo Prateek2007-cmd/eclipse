@@ -24,6 +24,8 @@ an approval grant exists (approval BEFORE vault fill, §5.4).
 """
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -31,12 +33,29 @@ from ..core import db
 from ..core.auth import require_token
 from ..tasks import loop
 from ..vault import grants as grant_store
-from ..vault.store import VAULT_FILE, Vault, VaultError
+from ..vault.store import VAULT_FILE, Vault, VaultError, is_never_stored_field
 
 router = APIRouter()
 
 # The process-wide vault (one Fernet file, unlocked in memory).
 VAULT = Vault()
+
+
+def _normalise_origin(raw: str) -> str:
+    """The origin (scheme + host, no port, lowercased host) of a
+    URL — the same form server/tasks/loop.py's _origin_of
+    produces for the observation URL, so the two compare equal.
+    "" when the input has no host."""
+    try:
+        parsed = urlparse(raw)
+        if not parsed.hostname:
+            return ""
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return ""
+        return f"{scheme}://{parsed.hostname}"
+    except (ValueError, TypeError, AttributeError):
+        return ""
 
 
 class CreateIn(BaseModel):
@@ -50,6 +69,12 @@ class UnlockIn(BaseModel):
     card_number: str | None = Field(default=None, max_length=25)
     card_expiry: str | None = Field(default=None, max_length=10)
     card_cvv: str | None = Field(default=None, max_length=6)
+    # The checkout origin the card may be filled on (e.g.
+    # "https://shop.example.com"). Without it the grant fills on
+    # any allowed site; with it, only there (fill.py enforces
+    # the scope on every fill). Normalised to scheme://host
+    # (no port) to match the observation origin.
+    origin: str | None = Field(default=None, max_length=300)
 
 
 class LockIn(BaseModel):
@@ -103,13 +128,24 @@ def unlock(body: UnlockIn, _token: str = Depends(require_token)):
             "expiry": body.card_expiry,
             "cvv": body.card_cvv,
         }
-    grant = grant_store.GRANTS.create(body.task_id, card)
+    # Origin-scope the grant when the caller names one. An
+    # unparseable origin is a 400 — silently dropping it would
+    # create an unscoped grant the user thought was scoped.
+    origin = None
+    if body.origin:
+        origin = _normalise_origin(body.origin)
+        if not origin:
+            raise HTTPException(
+                status_code=400, detail=f"not a valid origin: {body.origin}"
+            )
+    grant = grant_store.GRANTS.create(body.task_id, card, origin=origin)
     return {
         "task_id": body.task_id,
         "grant_id": grant.id,
         "expires_at": grant.expires_at,
         "expires_in_s": grant_store.GRANT_TTL_S,
         "card_last4": grant.card_last4,
+        "origin": grant.origin,
     }
 
 
@@ -169,9 +205,11 @@ def status(task_id: str | None = None, _token: str = Depends(require_token)):
     }
 
 
-# Fields that must never be stored (§6.7: card number and CVV
-# are entered per task, never stored).
-NEVER_STORED_FIELDS = {"card_number", "card", "cvv"}
+# Fields that must never be stored (§6.7: card numbers and CVVs
+# are entered per task, never stored; OTPs are human-only). The
+# matcher lives in server/vault/store.py (substring, not an
+# exact-name list — "cardnumber" must not slip past) and the
+# store refuses them again as the last line of defence.
 
 
 @router.post("/vault/store-password")
@@ -180,7 +218,7 @@ def store_password(body: StorePasswordIn, _token: str = Depends(require_token)):
     Only call this when the user opted in for this site — the
     default is per-task entry (no storage). Card numbers and
     CVVs are refused: they are never stored, by design."""
-    if body.field.lower() in NEVER_STORED_FIELDS:
+    if is_never_stored_field(body.field):
         raise HTTPException(
             status_code=400,
             detail=f"field {body.field} is never stored (enter it per task)",

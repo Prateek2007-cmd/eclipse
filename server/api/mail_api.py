@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -55,6 +56,11 @@ def _find_resume(user_files: Path | None = None) -> str | None:
     mistake. None when no file matches — the caller must not
     silently send without the attachment it promised.
 
+    A file NAMED as a resume wins over a merely same-owner file:
+    the folder also holds the user's other documents (a ServiceNow
+    write-up, interview notes), and the newest of those must not
+    be attached as the resume. Within a class, the newest wins.
+
     The local file is the canonical attachment source (it is the
     resume the user handed over). Drive's find_resume() is a
     separate lookup and may hold a different copy; the two are
@@ -67,19 +73,64 @@ def _find_resume(user_files: Path | None = None) -> str | None:
     if not user_files.is_dir():
         return None
     candidates = [
-        p for p in user_files.glob("*.pdf")
-        if p.name.lower().startswith("akash")
-        or "resume" in p.name.lower()
+        p for p in user_files.iterdir()
+        if p.is_file() and p.suffix.lower() == ".pdf"
+        and (p.name.lower().startswith("akash")
+             or "resume" in p.name.lower())
     ]
     if not candidates:
         return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    def _rank(p):
+        name = p.name.lower()
+        named = 0 if ("resume" in name
+                      or re.search(r"(^|[^a-z])cv([^a-z]|$)", name)) else 1
+        return (named, -p.stat().st_mtime)
+
+    candidates.sort(key=_rank)
     return str(candidates[0])
 
 
-import re
-
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+
+
+def _live_grant_for_draft(conn, task_id: str, draft_id: str) -> str | None:
+    """The id of a live approval grant naming this draft, or None.
+    One definition, used by the approve endpoint (is this draft
+    already approved with a live grant?) and the send endpoint
+    (which grant does this send consume?)."""
+    now = int(time.time())
+    rows = conn.execute(
+        "SELECT id, detail FROM grants WHERE origin = ?"
+        " AND scope = 'approve' AND expires_at > ?",
+        (task_id, now),
+    ).fetchall()
+    for row in rows:
+        try:
+            detail = json.loads(row["detail"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if detail.get("draft_id") == draft_id:
+            return row["id"]
+    return None
+
+
+def _revoke_grants_for_draft(conn, task_id: str, draft_id: str) -> None:
+    """Delete every approval grant naming this draft — an edit
+    revokes the approval the grant carries, so a stale grant
+    must not survive to send the edited body."""
+    rows = conn.execute(
+        "SELECT id, detail FROM grants WHERE origin = ? AND scope = 'approve'",
+        (task_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            detail = json.loads(row["detail"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if detail.get("draft_id") == draft_id:
+            conn.execute("DELETE FROM grants WHERE id = ?", (row["id"],))
+    conn.commit()
 
 
 class RecipientIn(BaseModel):
@@ -185,7 +236,20 @@ def approve_draft(draft_id: str, body: ApproveIn, _token: str = Depends(require_
         draft = draft_mod.get_draft(conn, draft_id)
         if draft is None:
             raise HTTPException(status_code=404, detail=f"no draft {draft_id}")
-        if not draft_mod.approve_draft(conn, draft_id):
+        if draft["status"] == "approved":
+            # The draft was approved but its grant may have
+            # expired (grants live 10 minutes) — without a live
+            # grant the draft is stuck: approved but un-sendable,
+            # and approve_draft refuses a second approval. Allow
+            # a fresh approval when no live grant names it (a
+            # failed send lands here too: the failure is logged,
+            # the draft stays approved, and the user re-approves
+            # to retry).
+            if _live_grant_for_draft(conn, draft["task_id"], draft_id) is not None:
+                raise HTTPException(
+                    status_code=409, detail=f"draft {draft_id} is approved"
+                )
+        elif not draft_mod.approve_draft(conn, draft_id):
             raise HTTPException(
                 status_code=409, detail=f"draft {draft_id} is {draft['status']}"
             )
@@ -208,10 +272,15 @@ def approve_draft(draft_id: str, body: ApproveIn, _token: str = Depends(require_
 def edit_draft(draft_id: str, body: EditIn, _token: str = Depends(require_token)):
     conn = _conn()
     try:
-        if draft_mod.get_draft(conn, draft_id) is None:
+        draft = draft_mod.get_draft(conn, draft_id)
+        if draft is None:
             raise HTTPException(status_code=404, detail=f"no draft {draft_id}")
         if not draft_mod.update_draft_body(conn, draft_id, body.body):
             raise HTTPException(status_code=409, detail="draft is already sent")
+        # The edit revoked the approval (the draft is a draft
+        # again) — drop any grant naming it, so a stale approval
+        # cannot send the edited body.
+        _revoke_grants_for_draft(conn, draft["task_id"], draft_id)
     finally:
         conn.close()
     return {"draft_id": draft_id, "status": "edited"}
@@ -244,27 +313,20 @@ def send_draft(draft_id: str, body: SendIn | None = None,
         # job-submit approval cannot send a mail.
         #
         # Atomicity note: the DELETE below is uncommitted until
-        # send_draft commits. A failed send rolls the grant back
-        # (sqlite3 rolls back the open transaction on close), so
-        # the approval survives a failure and can be retried. The
-        # open write transaction is held across the send call, so
-        # a concurrent same-draft send hits the busy timeout —
-        # that surfaces as 409, not a half-sent mail.
-        now = int(time.time())
-        grants = conn.execute(
-            "SELECT id, detail FROM grants WHERE origin = ?"
-            " AND scope = 'approve' AND expires_at > ?",
-            (draft["task_id"], now),
-        ).fetchall()
-        grant_id = None
-        for row in grants:
-            try:
-                detail = json.loads(row["detail"] or "{}")
-            except (json.JSONDecodeError, TypeError):
-                continue
-            if detail.get("draft_id") == draft_id:
-                grant_id = row["id"]
-                break
+        # send_draft commits. A send refused before the transport
+        # runs (a bounced address, a draft that is no longer
+        # approved) rolls the grant back (sqlite3 rolls back the
+        # open transaction on close), so the approval survives
+        # and can be retried. A transport failure is different:
+        # send_draft logs the failure and commits, which also
+        # commits the grant consumption — the approval
+        # authorised one send attempt, and the attempt happened.
+        # The draft stays approved and can be re-approved for a
+        # retry. The open write transaction is held across the
+        # send call, so a concurrent same-draft send hits the
+        # busy timeout — that surfaces as 409, not a half-sent
+        # mail.
+        grant_id = _live_grant_for_draft(conn, draft["task_id"], draft_id)
         if grant_id is None:
             raise HTTPException(
                 status_code=409,
