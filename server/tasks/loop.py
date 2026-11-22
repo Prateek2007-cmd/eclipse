@@ -52,6 +52,7 @@ MAX_RETRIES_PER_STEP = 3
 MAX_PLANNER_CALLS_PER_STEP = 3
 RETRY_BACKOFF_S = (1, 2, 4)
 HANDOFF_TIMEOUT_S = 600  # plan §5.5 step 4: never wait forever
+ROLE_CLAIM_TTL_S = 600  # a role claim lives 10 minutes (the approval window)
 
 # A step whose description mentions one of these is human-only.
 HUMAN_ONLY_MARKERS = (
@@ -123,6 +124,14 @@ def plan_task(conn, task_id: str, call_fn=None) -> list[dict]:
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"no task {task_id}")
+    # Planning is one-shot: a second plan call would INSERT a
+    # duplicate set of steps (same n) and resurrect a finished
+    # task. A plan that failed part-way leaves the task "created",
+    # so re-planning after a failure still works.
+    if task["status"] != "created":
+        raise ValueError(
+            f"task {task_id} is {task['status']}; refusing to re-plan"
+        )
     call_fn = call_fn or router.call_planner
     facts = _memory_facts(conn, task["goal"])
     prompt = prompts.build_plan_prompt(task["goal"], task["constraints"], facts)
@@ -280,6 +289,37 @@ def _is_consequential(action: dict, elements: list[dict]) -> bool:
     return any(w in text for w in ("submit", "confirm", "place order", "pay", "send"))
 
 
+# Element labels that mark a pagination / list-navigation control:
+# these are DESIGNED to be clicked repeatedly (page 2, page 3, …),
+# so the cross-step repeat guard must not block them. Anything else
+# the planner re-clicks across steps is a stall, not pagination.
+_PAGINATION_LABELS = (
+    "next", "prev", "previous", "load more", "show more",
+    "more", "more results", "see more",
+)
+
+
+def _is_pagination_control(action: dict, elements: list[dict]) -> bool:
+    """Is this click on a pagination control (a "Next" button, a
+    page-number link)? The label is the element's name or text,
+    normalised; a bare number is a page link."""
+    if action.get("action") != "click":
+        return False
+    target = next(
+        (e for e in elements if e.get("id") == action.get("element_id")), None
+    )
+    if target is None:
+        return False
+    # Either the name or the text may carry the label (an element
+    # named "Next" with text "Next" must not become "next next").
+    for raw in (target.get("name") or "", target.get("text") or ""):
+        label = raw.strip().lower().strip("→›»«‹← ").strip()
+        label = " ".join(label.split())
+        if label in _PAGINATION_LABELS or (label and label.isdigit()):
+            return True
+    return False
+
+
 # Consequential goal verbs (§5.4): purchases, sends and
 # applications all need a fresh approval. "Log in to the test
 # portal" has none of these, so the login-fixture flow stays
@@ -307,13 +347,14 @@ def _consume_approval(conn, task_id: str, element_id: str | None = None,
     """Consume one valid approval grant for this task (a grant is
     single-use; purchases never get a lasting allow, §5.4).
 
-    Atomic: a single DELETE whose subquery picks one grant, so two
-    concurrent submits cannot spend the same grant (the old
-    SELECT-then-DELETE raced). Action-scoped: a grant whose detail
-    names an element or role only covers that element or role —
-    an approval for role A cannot be consumed by a submit for
-    role B. A grant with no detail (the old shape) covers any
-    action on the task.
+    Single-use: the grant is picked by SELECT and spent by a
+    DELETE-by-id whose rowcount must be 1, so two concurrent
+    submits cannot spend the same grant (the loser's DELETE
+    affects 0 rows). Action-scoped: a grant whose detail names an
+    element or role only covers that element or role — an approval
+    for role A cannot be consumed by a submit for role B. A grant
+    that names neither covers any action on the task ("step" and
+    "approval_id" in the detail are metadata, not scope).
     """
     now = int(time.time())
     # Pick one matching grant, preferring the most specific one.
@@ -330,13 +371,15 @@ def _consume_approval(conn, task_id: str, element_id: str | None = None,
                 detail = json.loads(row["detail"])
             except (ValueError, TypeError):
                 detail = {}
-        if not detail:
+        scoped_element = detail.get("element_id")
+        scoped_role = detail.get("role_id")
+        if not scoped_element and not scoped_role:
             chosen = row["id"]
             break
-        if element_id and detail.get("element_id") == element_id:
+        if element_id and scoped_element == element_id:
             chosen = row["id"]
             break
-        if role_id and detail.get("role_id") == role_id:
+        if role_id and scoped_role == role_id:
             chosen = row["id"]
             break
     if chosen is None:
@@ -346,11 +389,173 @@ def _consume_approval(conn, task_id: str, element_id: str | None = None,
     return cur.rowcount == 1
 
 
+def _has_live_claim(conn, task_id: str, role_key: str, url: str | None) -> bool:
+    """Does ANOTHER task hold a live claim on this role (an
+    in-flight submit)? A claim is a receipts row with status
+    'claimed', recorded at execute time (the receipt itself only
+    lands at verify time — without the claim, two tasks for the
+    same role both pass the already-applied gate and both submit).
+    Claims older than the TTL are stale (the task crashed, or its
+    submit failed) and no longer block. My own task's claim never
+    blocks me (a verify-failed retry re-executes the step)."""
+    now = int(time.time())
+    rows = conn.execute(
+        "SELECT task_id FROM receipts WHERE status = 'claimed'"
+        " AND role_id = ? AND created_at > ?",
+        (role_key, now - ROLE_CLAIM_TTL_S),
+    ).fetchall()
+    if url:
+        rows += conn.execute(
+            "SELECT task_id FROM receipts WHERE status = 'claimed'"
+            " AND url = ? AND created_at > ?",
+            (url, now - ROLE_CLAIM_TTL_S),
+        ).fetchall()
+    return any(r["task_id"] != task_id for r in rows)
+
+
+def _claim_role(conn, task_id: str, role_key: str, url: str | None) -> str | None:
+    """Claim a role for this task's in-flight submit (§6.9 race).
+    Returns the claim id, or None when another task already holds
+    a live claim. The check and the insert run under BEGIN
+    IMMEDIATE (when the caller holds no transaction), so two
+    tasks racing for the same role serialize: the loser sees the
+    winner's claim instead of writing its own. My own claim (any
+    age) is refreshed, not duplicated — a verify-failed retry
+    re-executes the step, and the (task, role) unique index would
+    reject a second claim row."""
+    began = False
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        began = True
+    try:
+        own = conn.execute(
+            "SELECT id FROM receipts WHERE task_id = ? AND role_id = ?"
+            " AND status = 'claimed'",
+            (task_id, role_key),
+        ).fetchone()
+        if own is not None:
+            conn.execute(
+                "UPDATE receipts SET created_at = ? WHERE id = ?",
+                (int(time.time()), own["id"]),
+            )
+            conn.commit()
+            return own["id"]
+        if _has_live_claim(conn, task_id, role_key, url):
+            if began:
+                conn.rollback()
+            return None
+        claim_id = uuid.uuid4().hex[:12]
+        conn.execute(
+            "INSERT INTO receipts (id, task_id, role_id, title, company, url,"
+            " status, confirmation, created_at) VALUES (?, ?, ?, '', '', ?, 'claimed', '', ?)",
+            (claim_id, task_id, role_key, url or "", int(time.time())),
+        )
+        conn.commit()
+        return claim_id
+    except Exception:
+        if began:
+            conn.rollback()
+        raise
+
+
+def _release_claim(conn, claim_id: str) -> None:
+    """Release one role claim (approval failed after claiming, so
+    this task cannot submit — it must not hold the role)."""
+    conn.execute(
+        "DELETE FROM receipts WHERE id = ? AND status = 'claimed'",
+        (claim_id,),
+    )
+    conn.commit()
+
+
+def _release_claim_for_task(conn, task_id: str, role_key: str) -> None:
+    """Release this task's claim on one role (its submit step
+    failed verification, so the submit never landed — the role
+    must be retryable at once, not after the claim TTL)."""
+    conn.execute(
+        "DELETE FROM receipts WHERE task_id = ? AND role_id = ? AND status = 'claimed'",
+        (task_id, role_key),
+    )
+    conn.commit()
+
+
+def release_claims_for_task(conn, task_id: str) -> int:
+    """Release every live role claim this task holds (a cancelled
+    task will never submit, so it must not hold its roles for the
+    rest of the claim TTL). Returns the number released."""
+    cur = conn.execute(
+        "DELETE FROM receipts WHERE task_id = ? AND status = 'claimed'",
+        (task_id,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def _settle_receipt(conn, task_id: str, role_key: str, title: str,
+                    url: str, confirmation: str) -> None:
+    """Settle the receipt for a verified submit (§6.9 race):
+    promote this task's execute-time claim to submitted, or — if
+    another task already submitted this role (my claim expired
+    while the submit was in flight) — drop the stale claim and
+    record nothing (one submitted receipt per role, ever). With
+    no claim on file (an execute from before claims existed),
+    record a fresh receipt. The check + write run under BEGIN
+    IMMEDIATE, so two tasks verifying the same role at once
+    cannot both land a submitted receipt; the fresh-record path
+    relies on record_receipt's own per-role idempotency."""
+    from ..jobs import applied as _applied
+    from ..jobs import receipts as _receipts
+
+    began = False
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        began = True
+    try:
+        if _applied.is_already_applied(conn, role_key, url or None):
+            conn.execute(
+                "DELETE FROM receipts WHERE task_id = ? AND role_id = ?"
+                " AND status = 'claimed'",
+                (task_id, role_key),
+            )
+            conn.commit()
+            return
+        cur = conn.execute(
+            "UPDATE receipts SET title = ?, url = ?, status = 'submitted',"
+            " confirmation = ?, created_at = ?"
+            " WHERE task_id = ? AND role_id = ? AND status = 'claimed'",
+            (title, url, confirmation, int(time.time()), task_id, role_key),
+        )
+        if cur.rowcount == 1:
+            conn.commit()
+            return
+        conn.commit()
+    except Exception:
+        if began:
+            conn.rollback()
+        raise
+    # No claim to promote: a fresh receipt. record_receipt is
+    # itself idempotent per role, so a submit that landed between
+    # the check above and this insert still yields one receipt.
+    _receipts.record_receipt(
+        conn, task_id, role_key, title, "", url, confirmation,
+        status="submitted",
+    )
+
+
 def _handoff(conn, task_id: str, n: int, reason: str) -> None:
     """Human-only step (§5.5): pause, save a checkpoint, log the
     handoff in the audit trail, and record the 10-minute deadline.
     The task never waits forever: resume after the deadline fails
-    it instead (see resume_task)."""
+    it instead (see resume_task).
+
+    Idempotent: a step already handed off keeps its original
+    checkpoint and deadline — re-executing it (it raises again on
+    the human-only description or element) must not reset the
+    10-minute clock, or a retry loop could wait forever.
+    """
+    existing = _get_step(conn, task_id, n)
+    if existing is not None and existing["status"] == "handoff":
+        return
     deadline = int(time.time()) + HANDOFF_TIMEOUT_S
     conn.execute(
         "UPDATE steps SET status = 'handoff', error = ? WHERE task_id = ? AND n = ?",
@@ -377,11 +582,24 @@ def resume_task(conn, task_id: str) -> str:
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"no task {task_id}")
+    # Resume only makes sense from a handoff (the user completed
+    # the human step) or a pause. Resuming a done, cancelled or
+    # failed task would silently resurrect it — the workspace
+    # Resume button is only enabled for paused tasks.
+    if task["status"] not in ("handoff", "paused"):
+        raise ValueError(
+            f"task {task_id} is {task['status']}; nothing to resume"
+        )
     now = int(time.time())
     handoff_steps = conn.execute(
         "SELECT n FROM steps WHERE task_id = ? AND status = 'handoff'",
         (task_id,),
     ).fetchall()
+    # Phase 1: check EVERY handoff deadline first. A single
+    # expired handoff fails the task — without marking any step
+    # done first (the old loop marked the earlier steps done, then
+    # failed the task on the expired one, leaving a failed task
+    # with done handoff steps).
     for row in handoff_steps:
         # The deadline lives in the handoff checkpoint's state_json.
         cp = conn.execute(
@@ -399,6 +617,9 @@ def resume_task(conn, task_id: str) -> str:
             _set_task_status(conn, task_id, "failed")
             _audit(conn, task_id, "task.handoff_timeout", {"step": row["n"]})
             return "failed"
+    # Phase 2: every deadline is live — the user completed the
+    # human steps, so mark them done and continue from the checkpoint.
+    for row in handoff_steps:
         conn.execute(
             "UPDATE steps SET status = 'done', result = 'completed by user (handoff)',"
             " ended_at = ? WHERE task_id = ? AND n = ?",
@@ -431,6 +652,21 @@ def execute_step(
     task = get_task(conn, task_id)
     if task is None:
         raise KeyError(f"no task {task_id}")
+    # The task's own state gates execution: a cancelled or paused
+    # task stays stopped, and a failed or finished task never runs
+    # again (the old code only looked at the step, so pause/cancel
+    # were advisory). "ask_user" still executes: an approval
+    # returns the task to "planned", and a re-execute without one
+    # re-asks instead of running. "handoff" also still executes:
+    # the page itself gates progress after a handoff — the OTP form
+    # is still showing, so the next step cannot meaningfully run
+    # until the user completes the human step — and the benchmark
+    # drives every step of a fixture regardless, counting a
+    # post-handoff refusal as a fixture error. Blocking handoff
+    # here broke two benchmark tests; the page-state gate is the
+    # real protection.
+    if task["status"] in ("cancelled", "paused", "failed", "done"):
+        raise ValueError(f"task {task_id} is {task['status']}; refusing to execute")
     step = _get_step(conn, task_id, n)
     if step is None:
         raise KeyError(f"no step {n} for task {task_id}")
@@ -453,7 +689,11 @@ def execute_step(
     interactable_ids = {
         e["id"] for e in elements if isinstance(e.get("id"), str) and e.get("interactable")
     }
-    obs_text = ctx.format_observation(observation.get("url", ""), elements)
+    # The observation URL goes to the cloud planner: strip the
+    # query string and fragment first (a password-reset token or a
+    # session id in the query must not leave the device — the same
+    # origin + pathname rule verify and the receipts already use).
+    obs_text = ctx.format_observation(_strip_url(observation.get("url", "")), elements)
     summary = checkpoint_summary(conn, task_id)
     results = last_results(conn, task_id)
     facts = _memory_facts(conn, task["goal"])
@@ -466,6 +706,27 @@ def execute_step(
         "LAST STEP RESULTS:\n" + "\n".join(results) if results else "",
         "REMEMBERED FACTS:\n" + "\n".join(facts) if facts else "",
     ]
+    # A re-executed step (verification failed last time) tells the
+    # planner what it already tried — without this the planner
+    # repeats the failed action blindly (the live stall: "click
+    # Search" three times on step 5). A repeated click is also
+    # hard-blocked below; other actions are only flagged, because
+    # a re-scroll or a re-type can legitimately succeed.
+    prev_action = plan_step.get("action")
+    prev_element = plan_step.get("element_id")
+    if prev_action:
+        prev_line = (
+            "PREVIOUS ATTEMPT ON THIS STEP (verification failed —"
+            f" the end state was not reached): {prev_action}"
+        )
+        if prev_element:
+            prev_line += f" {prev_element}"
+        if prev_action == "click" and prev_element:
+            prev_line += (
+                f". Do not click {prev_element} again on this step;"
+                " choose a different action."
+            )
+        fixed.append(prev_line)
     prompt = ctx.fit_to_budget(fixed, obs_text)
     if ctx.estimate_tokens(prompt) > ctx.MAX_TOKENS:
         logger.warning(
@@ -520,7 +781,8 @@ def execute_step(
         try:
             action = validate.parse_action(raw)
             validate.validate_action(
-                action, element_ids, interactable_ids, allowed_sites, elements=elements
+                action, element_ids, interactable_ids, allowed_sites,
+                elements=elements, current_url=observation.get("url", ""),
             )
         except validate.ValidationError as exc:
             # Grounding failure: do NOT re-plan against the same
@@ -567,6 +829,29 @@ def execute_step(
             )):
                 _handoff(conn, task_id, n, f"action targets a human-only element: {action.get('element_id')}")
                 raise ValueError(f"step {n} targets a human-only element")
+        # Same-step repeat (the live stall: step 5 re-planned
+        # "click Search" after verification failed, because the
+        # guard below only looked at DONE steps): this step already
+        # tried this exact click and verification failed — reject
+        # it and let the planner choose something else within this
+        # step's 3-call budget. Clicks only: a re-scroll or a
+        # re-type on the same step can legitimately succeed.
+        if (
+            action.get("action") == "click"
+            and prev_action == "click"
+            and action.get("element_id")
+            and action.get("element_id") == prev_element
+        ):
+            last_error = (
+                f"element {action['element_id']} was already clicked "
+                f"on this step (step {n}) and verification failed; "
+                "choose a different action for this step"
+            )
+            logger.warning(
+                "task %s step %s planner attempt %d repeated this step's click: %s",
+                task_id, n, attempt, last_error,
+            )
+            continue
         # Never retry a submit: a click on an element that already
         # has a done click step in this task is a REPEAT, not an
         # instant failure — tell the planner which step already
@@ -577,7 +862,14 @@ def execute_step(
         # re-planning). After 3 repeats the step fails with the
         # "could not produce a valid action in 3 calls" error below
         # and the task asks the user — still fail-closed.
-        if action.get("action") == "click" and action.get("element_id"):
+        # Pagination controls ("Next", "Load more", page numbers)
+        # are exempt: they are designed to be clicked repeatedly,
+        # and blocking them strands any multi-page flow.
+        if (
+            action.get("action") == "click"
+            and action.get("element_id")
+            and not _is_pagination_control(action, elements)
+        ):
             done_rows = conn.execute(
                 "SELECT n, action_json FROM steps WHERE task_id = ? AND status = 'done'",
                 (task_id,),
@@ -612,6 +904,7 @@ def execute_step(
         # alone is not enough. The role comes from the task
         # constraints ("role: …", "url: …").
         role_ctx = _role_from_constraints(task.get("constraints") or "")
+        claim_id: str | None = None
         if _is_consequential(action, elements) and (
             role_ctx["role_id"] or role_ctx["url"]
         ):
@@ -628,6 +921,28 @@ def execute_step(
                     f"already applied to {role_ctx['role_id'] or role_ctx['url']}"
                     " (receipt on file — no re-submit)"
                 )
+            # Claim the role for this task's in-flight submit
+            # (§6.9 race): the receipt only lands at verify time,
+            # so without a claim two tasks for the same role both
+            # pass the gate above and both submit before either
+            # receipt exists. The claim is promoted to the
+            # submitted receipt at verify time, released if this
+            # task cannot submit (approval below), and expires
+            # after 10 minutes if the task dies mid-submit.
+            claim_id = _claim_role(
+                conn, task_id, role_ctx["role_id"] or role_ctx["url"],
+                role_ctx["url"],
+            )
+            if claim_id is None:
+                _set_task_status(conn, task_id, "ask_user")
+                _audit(conn, task_id, "task.already_applying",
+                       {"step": n, "role_id": role_ctx["role_id"],
+                        "url": role_ctx["url"]})
+                raise ValueError(
+                    "another task is already applying to "
+                    f"{role_ctx['role_id'] or role_ctx['url']}"
+                    " (in-flight submit — no double-apply)"
+                )
         # Approval before a consequential action (§5.4): a submit /
         # apply / confirm click on a task that requires approval
         # needs a valid grant. Without one, the task asks the user
@@ -640,6 +955,10 @@ def execute_step(
                 element_id=action.get("element_id"),
                 role_id=role_ctx["role_id"],
             ):
+                # The claim is released: this task cannot submit
+                # without approval, so it must not hold the role.
+                if claim_id is not None:
+                    _release_claim(conn, claim_id)
                 _set_task_status(conn, task_id, "ask_user")
                 _audit(conn, task_id, "task.approval_needed",
                        {"step": n, "action": action.get("action"),
@@ -654,11 +973,33 @@ def execute_step(
         # info (the fingerprint), the allowed sites and the task id
         # (the live path had none of these, so the fingerprint
         # check was dead and every submit was refused).
+        # The stored action keeps the plan's description and
+        # expected end state (the old code overwrote action_json
+        # with the bare action, so the plan description vanished
+        # from GET /tasks and a re-execute returned an empty
+        # expected end state). Only the plan keys are kept — the
+        # plan keys always win, so a planner-supplied "description"
+        # cannot rewrite the plan, and stale action fields from a
+        # previous attempt (a "text" from an old type) never
+        # survive into the new action.
+        # A validated action also resets the grounding counter:
+        # the rule is two failed groundings IN A ROW, and a success
+        # breaks the row.
+        stored = dict(action)
+        stored["step"] = plan_step.get("step", n)
+        stored["description"] = plan_step.get("description", "")
+        stored["expected_end_state"] = plan_step.get("expected_end_state", "")
+        # Whether this action was consequential, decided now while
+        # the target element is in view: verify_step records a
+        # receipt only for consequential clicks, and by verify time
+        # the element is gone (the page moved on).
+        stored["_consequential"] = _is_consequential(action, elements)
         now = int(time.time())
         conn.execute(
             "UPDATE steps SET action_json = ?, element_id = ?, status = 'executing',"
-            " started_at = ?, ms = ? WHERE task_id = ? AND n = ?",
-            (json.dumps(action), action.get("element_id"), now, int(ms), task_id, n),
+            " started_at = ?, ms = ?, grounding_failures = 0"
+            " WHERE task_id = ? AND n = ?",
+            (json.dumps(stored), action.get("element_id"), now, int(ms), task_id, n),
         )
         conn.commit()
         _audit(conn, task_id, "task.execute",
@@ -789,6 +1130,15 @@ def verify_step(
     step = _get_step(conn, task_id, n)
     if step is None:
         raise KeyError(f"no step {n} for task {task_id}")
+    # Verify only runs on a live task's executing step. The old
+    # code checked neither: a pending step (no action ever ran)
+    # verified on a bare URL change, and verifying a cancelled
+    # task's last step flipped the task to "done".
+    task = get_task(conn, task_id)
+    if task is not None and task["status"] in ("cancelled", "paused", "failed", "done"):
+        raise ValueError(f"task {task_id} is {task['status']}; refusing to verify")
+    if step["status"] != "executing":
+        raise ValueError(f"step {n} is {step['status']}; refusing to verify (not executing)")
     action = json.loads(step["action_json"]) if step["action_json"] else {}
     if action.get("action") == "wait":
         return _mark_done(conn, task_id, n, "wait elapsed")
@@ -866,13 +1216,19 @@ def verify_step(
     if not verified and url and previous_url and url != previous_url:
         verified, reason = True, f"URL changed to {url}"
     if verified:
-        # A verified submit records its receipt HERE (§6.9) — the
+        # A verified SUBMIT records its receipt HERE (§6.9) — the
         # loop, not an external POST, is what makes "already
         # applied" durable. The role comes from the task
         # constraints; without a role there is nothing to record
         # (the login flow). The confirmation is the end-state
-        # text, redacted before it is stored.
-        if action.get("action") == "click":
+        # text, redacted before it is stored. Only consequential
+        # clicks count: an "Apply now" click that merely opens the
+        # form is not a submit, and recording it as one blocked
+        # the real submit with a false "already applied" (the flag
+        # was set at execute time, when the element was in view;
+        # rows written before the flag existed default to True, so
+        # an in-flight submit keeps its receipt).
+        if action.get("action") == "click" and action.get("_consequential", True):
             task_row = conn.execute(
                 "SELECT constraints FROM tasks WHERE id = ?", (task_id,)
             ).fetchone()
@@ -881,7 +1237,6 @@ def verify_step(
             )
             if role_ctx["role_id"] or role_ctx["url"]:
                 from ..jobs import applied as _applied
-                from ..jobs import receipts as _receipts
                 from ..planner import scan as _scan
 
                 confirmation, _hits = _scan.redact(
@@ -896,15 +1251,14 @@ def verify_step(
                     (e for e in (new_observation or {}).get("elements", [])
                      if e.get("id") == el), None
                 )
-                _receipts.record_receipt(
-                    conn, task_id,
-                    role_ctx["role_id"] or role_ctx["url"] or "",
+                role_key = role_ctx["role_id"] or role_ctx["url"] or ""
+                _settle_receipt(
+                    conn, task_id, role_key,
                     acted_el.get("name", "") if acted_el else "",
-                    "", role_ctx["url"] or url or "",
-                    confirmation, status="submitted",
+                    role_ctx["url"] or url or "", confirmation,
                 )
                 _applied.mark_applied(
-                    conn, role_ctx["role_id"] or role_ctx["url"] or "",
+                    conn, role_key,
                     role_ctx["url"] or url or None,
                 )
                 _audit(conn, task_id, "task.receipt",
@@ -925,6 +1279,17 @@ def verify_step(
             (f"verify failed after {retries} retries: {expected}", task_id, n),
         )
         _set_task_status(conn, task_id, "failed")
+        # The submit never landed: release this step's role claim
+        # (if any) so the role is retryable at once instead of
+        # waiting out the 10-minute claim TTL.
+        if action.get("action") == "click" and action.get("_consequential", True):
+            role_ctx = _role_from_constraints(
+                (task.get("constraints") or "") if task else ""
+            )
+            if role_ctx["role_id"] or role_ctx["url"]:
+                _release_claim_for_task(
+                    conn, task_id, role_ctx["role_id"] or role_ctx["url"]
+                )
         return {"verified": False, "reason": f"failed after {retries} retries", "retry": False}
     backoff = RETRY_BACKOFF_S[min(retries - 1, len(RETRY_BACKOFF_S) - 1)]
     return {
@@ -960,6 +1325,15 @@ def _mark_done(conn, task_id: str, n: int, reason: str) -> dict:
         " AND status IN ('pending', 'executing', 'handoff')",
         (task_id,),
     ).fetchone()["c"]
-    if remaining == 0:
+    # A failed step blocks "done" too: the old code only counted
+    # unfinished steps, so a task whose step 1 failed and whose
+    # step 2 then verified reported "done" with the goal half
+    # achieved. The task keeps its current status (ask_user or
+    # failed) until the user deals with the failed step.
+    failed = conn.execute(
+        "SELECT COUNT(*) AS c FROM steps WHERE task_id = ? AND status = 'failed'",
+        (task_id,),
+    ).fetchone()["c"]
+    if remaining == 0 and failed == 0:
         _set_task_status(conn, task_id, "done")
     return {"verified": True, "reason": reason, "retry": False}
