@@ -3,3 +3,6 @@
 fastapi==0.165.0
 uvicorn[standard]==0.54.0
 cryptography==50.0.2
+# RAG (server/rag/embed.py, store.py) imports numpy — without it the
+# server fails to start (ModuleNotFoundError). Verified 2026-11-22.
+numpy==2.5.5
