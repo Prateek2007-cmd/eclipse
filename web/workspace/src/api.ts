@@ -10,15 +10,25 @@
  * five places (quota wrapper + keys, flat task detail, proof
  * metric keys, latency shape, /health shape). The server is the
  * contract; the mappings below adapt its real shapes to the
- * shapes the panes render. They are the load-bearing lines of
+ * shapes the views render. They are the load-bearing lines of
  * this file — if a server key changes, this file must change
  * with it, not the other way round.
+ *
+ * Workspace redesign: every endpoint in server/api/ is covered
+ * here, typed from the route handlers. Two endpoints are typed
+ * but deliberately NOT wired to any UI button — execute and
+ * verify need a live browser observation ({url, elements}) that
+ * only the extension produces; the workspace has no observation
+ * source, so a button would send a fabricated observation.
+ * Execution stays in the extension.
  */
 export type TaskSummary = {
   id: string;
   goal: string;
   status: string;
   created_at: number;
+  updated_at: number;
+  receipt: string | null;
 };
 
 export type Step = {
@@ -26,15 +36,88 @@ export type Step = {
   description: string;
   status: string;
   action_json: string | null;
+  element_id: string | null;
   result: string | null;
+  error: string | null;
   retries: number;
+};
+
+export type Checkpoint = {
+  step_n: number;
+  summary: string;
+  created_at: number;
+};
+
+export type Receipt = {
+  id: string;
+  task_id: string;
+  role_id: string;
+  title: string;
+  company: string;
+  url: string;
+  status: string;
+  confirmation: string;
+  created_at: number;
 };
 
 export type TaskDetail = {
   task: TaskSummary & { constraints: string };
   steps: Step[];
-  checkpoints: unknown[];
-  receipts: unknown[];
+  checkpoints: Checkpoint[];
+  receipts: Receipt[];
+};
+
+/** One planned step, as the planner returns it
+ * (planner/validate.py parse_plan). */
+export type PlanStep = {
+  step: number;
+  description: string;
+  expected_end_state: string;
+};
+
+/** A browser observation, as the extension sends it. The
+ * workspace never constructs one — see the header note. */
+export type Observation = {
+  url: string;
+  elements: Record<string, unknown>[];
+};
+
+export type ExecuteResult = {
+  action: Record<string, unknown>;
+  expected_end_state: string;
+  model: string;
+  task_id: string;
+  element: Record<string, unknown> | null;
+  allowed_sites: string[];
+  fill: Record<string, string>;
+  fill_denied_reason: string | null;
+};
+
+export type VerifyResult = {
+  verified: boolean;
+  reason: string;
+  retry: boolean;
+  backoff_s?: number;
+};
+
+export type QuotaModel = {
+  name: string;
+  used_today: number;
+  limit: number;
+  reset_at: number;
+};
+
+export type SystemMetrics = {
+  tasks: number;
+  audit_entries: number;
+  quota: {
+    model: string;
+    used_today: number;
+    limit_day: number;
+    reset_at: number;
+  }[];
+  tokens: { in: number; out: number };
+  note: string;
 };
 
 export type ProofMetrics = {
@@ -52,7 +135,8 @@ export type ProofMetrics = {
   fixtures: number | null;
   worst_page: string | null;
   worst_pii_fixture: string | null;
-} | null;
+  reason: string | null;
+};
 
 export type SentEntry = {
   id: string;
@@ -66,12 +150,70 @@ export type SentEntry = {
   pii_types: string[];
 };
 
+export type EgressHit = {
+  entry_id: string;
+  endpoint: string;
+  type: string;
+};
+
+export type EgressResult = {
+  passed: boolean;
+  hit_count: number;
+  hits: EgressHit[];
+  checked: number;
+  patterns: string[];
+  note: string;
+};
+
+export type RedactionResult = {
+  generated_at: string | null;
+  recoverable_tokens: number | null;
+  passed: boolean | null;
+  pii_recall: number | null;
+  pii_precision: number | null;
+  per_fixture: Record<string, string[]> | null;
+  label_based_not_regex: Record<string, string[]>;
+  note: string | null;
+  reason: string | null;
+};
+
+export type LatencyFixture = {
+  steps: number;
+  verified: number;
+  elapsed_s: number;
+  errors: Record<string, string>;
+};
+
+export type LatencyResult = {
+  generated_at: string | null;
+  p50_s: number | null;
+  mean_s: number | null;
+  max_s: number | null;
+  target: number | null;
+  p50_within_target: boolean | null;
+  worst_fixture: string | null;
+  worst_fixture_s: number | null;
+  per_fixture: Record<string, LatencyFixture> | null;
+  planner: string | null;
+  note: string | null;
+  reason: string | null;
+};
+
 export type AuditEntry = {
   id: number;
   task_id: string | null;
   action: string;
   payload_hash: string;
+  prev_hash: string;
+  hash: string;
   created_at: number;
+};
+
+export type AuditVerifyResult = {
+  ok: boolean;
+  checked: number;
+  first_bad_id: number | null;
+  reason: string | null;
 };
 
 export type Watch = {
@@ -84,6 +226,28 @@ export type Watch = {
   status: string;
   last_checked: number | null;
   last_fired_at: number | null;
+  misses: number;
+  muted_until: number | null;
+  created_at: number;
+};
+
+export type WatchEvent = {
+  id: string;
+  watch_id: string;
+  kind: string;
+  old_value: string | null;
+  new_value: string | null;
+  detail: string;
+  created_at: number;
+};
+
+export type WatchCheckResult = {
+  watch_id: string;
+  fired: boolean;
+  broken: boolean;
+  became_broken: boolean;
+  status: string;
+  reason: string;
 };
 
 export type BriefingCard = {
@@ -92,6 +256,214 @@ export type BriefingCard = {
   body: string;
   action: string | null;
   action_label: string;
+};
+
+export type Briefing = {
+  id: string;
+  created_at: number;
+  cards: BriefingCard[];
+};
+
+/** The parsed resume profile (jobs/profile.py parse_resume).
+ * Fields the parser did not find stay null / empty. */
+export type Profile = {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  roll: string | null;
+  degree: string | null;
+  year: number | null;
+  cgpa: number | null;
+  skills: string[];
+  locations: string[];
+  stipend_min: number | null;
+};
+
+/** One role, as POST /jobs/match and POST /mail/drafts accept it. */
+export type RoleInput = {
+  id: string;
+  title: string;
+  company?: string;
+  site?: string;
+  url?: string;
+  stipend?: number | null;
+  location?: string;
+  deadline?: string | null;
+  skills?: string[];
+  min_year?: number | null;
+  degree?: string | null;
+  min_cgpa?: number | null;
+  requires_experience?: boolean;
+};
+
+export type MatchResult = {
+  role_id: string;
+  fits: boolean;
+  score: number;
+  reasons: string[];
+  missing: string[];
+  warnings: string[];
+  deadline: string | null;
+  stipend: number | null;
+  location: string;
+};
+
+export type MatchResponse = {
+  shortlist: MatchResult[];
+  excluded: MatchResult[];
+  count: number;
+};
+
+export type ReceiptReport = {
+  task_id: string;
+  submitted: Receipt[];
+  failed: Receipt[];
+  count: number;
+};
+
+export type Draft = {
+  id: string;
+  task_id: string;
+  recipient: string;
+  role_id: string;
+  subject: string;
+  body: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type MailLogEntry = {
+  id: string;
+  draft_id: string;
+  recipient: string;
+  role_id: string;
+  status: string;
+  detail: string;
+  created_at: number;
+};
+
+export type BounceResult = {
+  recipient: string;
+  bounced: boolean;
+  detail: string;
+};
+
+export type DraftsCreated = {
+  created: { draft_id: string; email: string; role_id: string }[];
+  skipped: { email: string; role_id: string | null; reason: string | string[] }[];
+};
+
+export type VaultGrant = {
+  grant_id: string;
+  task_id: string;
+  expires_at: number;
+  expires_in_s: number;
+  card_last4: string | null;
+  has_card: boolean;
+};
+
+export type VaultStatus = {
+  vault_file: string;
+  unlocked: boolean;
+  has_grants: boolean;
+  grants: VaultGrant[];
+};
+
+export type VaultUnlockResult = {
+  task_id: string;
+  grant_id: string;
+  expires_at: number;
+  expires_in_s: number;
+  card_last4: string | null;
+};
+
+export type VaultFillResult = {
+  ok: boolean;
+  reason?: string;
+  has_card?: boolean;
+  has_password?: boolean;
+  card_last4?: string | null;
+};
+
+export type ConnectorRow = {
+  name: string;
+  enabled: boolean;
+  state: string | null;
+  last_checked: number | null;
+  last_error: string | null;
+};
+
+export type ConnectorLiveStatus = {
+  name: string;
+  state: string;
+  error?: string;
+  connect_url?: string;
+};
+
+export type GmailOffer = {
+  id: string;
+  from: string;
+  subject: string;
+  date: string;
+  body_redacted: string;
+};
+
+export type BusySlot = {
+  start: string;
+  end: string;
+};
+
+export type FreebusyResult = {
+  free: boolean;
+  busy: BusySlot[];
+};
+
+/** A Drive file as the CLI returns it. Only `id` is
+ * guaranteed; the rest is rendered only when present. */
+export type DriveFile = {
+  id: string;
+  name?: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  mimeType?: string;
+};
+
+/** A created calendar event. The live Google shape nests
+ * start/end ({dateTime}); the dedup return is flat strings —
+ * so start/end are typed unknown and rendered via a safe
+ * display helper in the view. */
+export type CalendarEventResult = {
+  id?: string;
+  summary?: string;
+  start?: unknown;
+  end?: unknown;
+  htmlLink?: string | null;
+  duplicate?: boolean;
+};
+
+export type Fact = {
+  id: string;
+  text: string;
+  source: string;
+  topic: string | null;
+  score: number;
+};
+
+export type RagChunk = {
+  id: string;
+  text: string;
+  kind: string;
+  meta: Record<string, unknown>;
+  score: number;
+};
+
+export type RagStatus = {
+  chunks: number;
+  model: string;
+  dimensions: number;
+  threshold: number;
+  model_available: boolean;
 };
 
 /** The server's real shapes (what the endpoints return). */
@@ -105,8 +477,8 @@ type ServerQuotaRow = {
 type ServerTask = TaskSummary & {
   constraints: string;
   steps: Step[];
-  checkpoints: unknown[];
-  receipts: unknown[];
+  checkpoints: Checkpoint[];
+  receipts: Receipt[];
 };
 
 type ServerProofMetrics = {
@@ -133,6 +505,22 @@ type ServerLatency = {
   latency_target_s: number | null;
   p50_within_target: boolean | null;
   worst_fixture: string | null;
+  worst_fixture_s: number | null;
+  per_fixture: Record<string, LatencyFixture> | null;
+  planner: string | null;
+  note?: string;
+  reason?: string;
+};
+
+type ServerRedaction = {
+  generated_at: string | null;
+  recoverable_tokens: number | null;
+  passed: boolean | null;
+  pii_recall: number | null;
+  pii_precision: number | null;
+  per_fixture: Record<string, string[]> | null;
+  label_based_not_regex: Record<string, string[]>;
+  note?: string;
   reason?: string;
 };
 
@@ -148,6 +536,13 @@ export function setToken(token: string): void {
 
 export function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY);
+}
+
+/** Was this the error the api client throws for a given HTTP
+ * status? Used for 404-as-empty-state (no profile yet, no
+ * briefing yet, no resume in Drive). */
+export function isHttpError(err: unknown, status: number): boolean {
+  return err instanceof Error && err.message.startsWith(`${status} on `);
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -176,50 +571,251 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // ---- system ----
   health: () =>
     call<{ status: string; service: string; version: string }>("/health"),
-  listTasks: () => call<{ tasks: TaskSummary[] }>("/tasks"),
-  /** B2: the server returns a FLAT task ({...task, steps,
-   * checkpoints, receipts}) — there is no `task` key. Adapt it
-   * to the nested shape the pane renders. */
-  getTask: async (id: string): Promise<TaskDetail> => {
-    const s = await call<ServerTask>(`/tasks/${id}`);
-    const { steps, checkpoints, receipts, ...task } = s;
-    return { task, steps, checkpoints, receipts };
-  },
-  createTask: (goal: string, constraints: string) =>
-    call<{ id: string }>("/tasks", {
-      method: "POST",
-      body: JSON.stringify({ goal, constraints }),
-    }),
-  planTask: (id: string) =>
-    call<{ task_id: string; steps: unknown[] }>(`/tasks/${id}/plan`, {
-      method: "POST",
-    }),
-  approveTask: (id: string, approvalId: string) =>
-    call(`/tasks/${id}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ approval_id: approvalId }),
-    }),
-  cancelTask: (id: string) =>
-    call(`/tasks/${id}/cancel`, { method: "POST" }),
-  pauseTask: (id: string) =>
-    call(`/tasks/${id}/pause`, { method: "POST" }),
-  resumeTask: (id: string) =>
-    call(`/tasks/${id}/resume`, { method: "POST" }),
+  systemMetrics: () => call<SystemMetrics>("/metrics"),
   /** B1: the server returns {quota: [{model, used_today,
    * limit_day, reset_at}]} — the wrapper key and the item keys
    * both differ from what the first version typed. */
-  quota: async () => {
+  quota: async (): Promise<{ models: QuotaModel[] }> => {
     const s = await call<{ quota: ServerQuotaRow[] }>("/quota");
     return {
       models: s.quota.map((r) => ({
         name: r.model,
         used_today: r.used_today,
         limit: r.limit_day,
+        reset_at: r.reset_at,
       })),
     };
   },
+
+  // ---- tasks ----
+  listTasks: (status?: string) =>
+    call<{ tasks: TaskSummary[] }>(
+      status ? `/tasks?status=${encodeURIComponent(status)}` : "/tasks",
+    ),
+  /** B2: the server returns a FLAT task ({...task, steps,
+   * checkpoints, receipts}) — there is no `task` key. Adapt it
+   * to the nested shape the view renders. */
+  getTask: async (id: string): Promise<TaskDetail> => {
+    const s = await call<ServerTask>(`/tasks/${id}`);
+    const { steps, checkpoints, receipts, ...task } = s;
+    return { task, steps, checkpoints, receipts };
+  },
+  createTask: (goal: string, constraints: string) =>
+    call<{ id: string; status: string }>("/tasks", {
+      method: "POST",
+      body: JSON.stringify({ goal, constraints }),
+    }),
+  planTask: (id: string) =>
+    call<{ task_id: string; steps: PlanStep[] }>(`/tasks/${id}/plan`, {
+      method: "POST",
+    }),
+  /** Typed but unwired in the UI: execute needs a live browser
+   * observation only the extension can produce. */
+  executeStep: (id: string, n: number, observation: Observation) =>
+    call<ExecuteResult>(`/tasks/${id}/steps/${n}/execute`, {
+      method: "POST",
+      body: JSON.stringify({ observation }),
+    }),
+  /** Typed but unwired in the UI: see executeStep. */
+  verifyStep: (
+    id: string,
+    n: number,
+    body: {
+      observation: Observation;
+      previous_observation: Observation;
+      expected_end_state: string;
+      previous_url: string;
+    },
+  ) =>
+    call<VerifyResult>(`/tasks/${id}/steps/${n}/verify`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  approveTask: (
+    id: string,
+    approvalId: string,
+    scope?: { step?: number; element_id?: string; role_id?: string },
+  ) =>
+    call<{ task_id: string; status: string; approval_id: string }>(
+      `/tasks/${id}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({ approval_id: approvalId, ...scope }),
+      },
+    ),
+  revokeGrants: (id: string) =>
+    call<{ task_id: string; revoked: number }>(`/tasks/${id}/grants`, {
+      method: "DELETE",
+    }),
+  cancelTask: (id: string) =>
+    call<{ task_id: string; status: string }>(`/tasks/${id}/cancel`, {
+      method: "POST",
+    }),
+  pauseTask: (id: string) =>
+    call<{ task_id: string; status: string }>(`/tasks/${id}/pause`, {
+      method: "POST",
+    }),
+  resumeTask: (id: string) =>
+    call<{ task_id: string; status: string }>(`/tasks/${id}/resume`, {
+      method: "POST",
+    }),
+
+  // ---- jobs ----
+  setProfile: (resumeText: string) =>
+    call<{ profile: Profile }>("/jobs/profile", {
+      method: "POST",
+      body: JSON.stringify({ resume_text: resumeText }),
+    }),
+  getProfile: () => call<{ profile: Profile }>("/jobs/profile"),
+  matchRoles: (roles: RoleInput[]) =>
+    call<MatchResponse>("/jobs/match", {
+      method: "POST",
+      body: JSON.stringify({ roles }),
+    }),
+  addReceipt: (
+    taskId: string,
+    receipt: {
+      role_id: string;
+      title: string;
+      company?: string;
+      url?: string;
+      confirmation: string;
+      status?: "submitted" | "failed";
+    },
+  ) =>
+    call<{ receipt_id: string; task_id: string; status: string }>(
+      `/tasks/${taskId}/receipts`,
+      { method: "POST", body: JSON.stringify(receipt) },
+    ),
+  getReceipts: (taskId: string) =>
+    call<ReceiptReport>(`/tasks/${taskId}/receipts`),
+  checkApplied: (roleId: string, url: string) =>
+    call<{ role_id: string; url: string; already_applied: boolean }>(
+      `/jobs/applied?role_id=${encodeURIComponent(roleId)}&url=${encodeURIComponent(url)}`,
+    ),
+
+  // ---- mail ----
+  createDrafts: (
+    taskId: string,
+    recipients: { email: string; role: RoleInput }[],
+  ) =>
+    call<DraftsCreated>("/mail/drafts", {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId, recipients }),
+    }),
+  listDrafts: (taskId?: string, status?: string) => {
+    const params = new URLSearchParams();
+    if (taskId) params.set("task_id", taskId);
+    if (status) params.set("status", status);
+    const q = params.toString();
+    return call<{ drafts: Draft[] }>(`/mail/drafts${q ? `?${q}` : ""}`);
+  },
+  approveDraft: (draftId: string, approvalId: string) =>
+    call<{ draft_id: string; status: string }>(
+      `/mail/drafts/${draftId}/approve`,
+      {
+        method: "POST",
+        body: JSON.stringify({ approval_id: approvalId }),
+      },
+    ),
+  editDraft: (draftId: string, body: string) =>
+    call<{ draft_id: string; status: string }>(`/mail/drafts/${draftId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ body }),
+    }),
+  sendDraft: (draftId: string, attachResume: boolean) =>
+    call<{
+      draft_id: string;
+      status: string;
+      detail: string;
+      attached_resume: string | null;
+    }>(`/mail/drafts/${draftId}/send`, {
+      method: "POST",
+      body: JSON.stringify({ attach_resume: attachResume }),
+    }),
+  bounceCheck: (taskId: string) =>
+    call<{ task_id: string; checked: BounceResult[] }>("/mail/bounce-check", {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId }),
+    }),
+  mailLog: (taskId?: string) =>
+    call<{ log: MailLogEntry[] }>(
+      taskId ? `/mail/log?task_id=${encodeURIComponent(taskId)}` : "/mail/log",
+    ),
+
+  // ---- vault ----
+  createVault: (password: string) =>
+    call<{ ok: boolean; vault_file: string }>("/vault/create", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  unlockVault: (body: {
+    password: string;
+    task_id: string;
+    card_number?: string;
+    card_expiry?: string;
+    card_cvv?: string;
+  }) =>
+    call<VaultUnlockResult>("/vault/unlock", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  lockVault: (taskId?: string) =>
+    call<{ locked: boolean; revoked: number }>("/vault/lock", {
+      method: "POST",
+      body: JSON.stringify(taskId ? { task_id: taskId } : {}),
+    }),
+  fillCheck: (taskId: string, origin: string, field: string) =>
+    call<VaultFillResult>("/vault/fill", {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId, origin, field }),
+    }),
+  revokeAllVault: () =>
+    call<{ revoked: number }>("/vault/revoke-all", { method: "POST" }),
+  vaultStatus: (taskId?: string) =>
+    call<VaultStatus>(
+      taskId ? `/vault/status?task_id=${encodeURIComponent(taskId)}` : "/vault/status",
+    ),
+  storePassword: (body: {
+    task_id: string;
+    origin: string;
+    field: string;
+    value: string;
+  }) =>
+    call<{ ok: boolean; origin: string; field: string }>(
+      "/vault/store-password",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  // ---- memory & RAG ----
+  storeFact: (text: string, source: string, topic?: string | null) =>
+    call<{ id: string }>("/memory/facts", {
+      method: "POST",
+      body: JSON.stringify({ text, source, topic: topic ?? null }),
+    }),
+  recallFacts: (query: string, limit = 5) =>
+    call<{ facts: Fact[] }>(
+      `/memory/facts?query=${encodeURIComponent(query)}&limit=${limit}`,
+    ),
+  indexChunk: (id: string, text: string, kind = "fact", meta: Record<string, unknown> = {}) =>
+    call<{ ok: boolean; id: string }>("/rag/index", {
+      method: "POST",
+      body: JSON.stringify({ id, text, kind, meta }),
+    }),
+  queryRag: (q: string, limit = 5) =>
+    call<{ results: RagChunk[]; model_available: boolean }>(
+      `/rag/query?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+  forgetChunk: (chunkId: string) =>
+    call<{ ok: boolean; id: string }>(`/rag/${encodeURIComponent(chunkId)}`, {
+      method: "DELETE",
+    }),
+  ragStatus: () => call<RagStatus>("/rag/status"),
+
+  // ---- proof ----
   /** B4: the server's metric keys are the benchmark JSON keys
    * (visual_grounding_first_try, redaction_recoverable_tokens)
    * and the run date is `generated_at`. Map them. */
@@ -234,6 +830,7 @@ export const api = {
         fixtures: s.fixtures ?? null,
         worst_page: s.worst_page ?? null,
         worst_pii_fixture: s.worst_pii_fixture ?? null,
+        reason: s.reason ?? null,
       };
     }
     return {
@@ -251,51 +848,151 @@ export const api = {
       fixtures: s.fixtures,
       worst_page: s.worst_page,
       worst_pii_fixture: s.worst_pii_fixture,
+      reason: null,
     };
   },
-  whatWasSent: (q = "") =>
-    call<{ entries: SentEntry[] }>(`/proof/what-was-sent?q=${encodeURIComponent(q)}`),
-  egress: () =>
-    call<{ hits: unknown[]; hit_count: number; checked: number; passed: boolean }>(
-      "/proof/egress",
+  whatWasSent: (q = "", limit = 50) =>
+    call<{ count: number; entries: SentEntry[] }>(
+      `/proof/what-was-sent?q=${encodeURIComponent(q)}&limit=${limit}`,
     ),
-  redaction: () =>
-    call<{ recoverable_tokens: number | null; passed: boolean | null; pii_recall: number | null; pii_precision: number | null }>(
-      "/proof/redaction",
-    ),
+  egress: () => call<EgressResult>("/proof/egress"),
+  redaction: async (): Promise<RedactionResult> => {
+    const s = await call<ServerRedaction>("/proof/redaction");
+    return {
+      generated_at: s.generated_at,
+      recoverable_tokens: s.recoverable_tokens,
+      passed: s.passed,
+      pii_recall: s.pii_recall,
+      pii_precision: s.pii_precision,
+      per_fixture: s.per_fixture,
+      label_based_not_regex: s.label_based_not_regex ?? {},
+      note: s.note ?? null,
+      reason: s.reason ?? null,
+    };
+  },
   /** B5: the server returns {step_time_s: {p50, mean, max},
    * latency_target_s, ...} — not {p50_s, target}. Map it. */
-  latency: async () => {
+  latency: async (): Promise<LatencyResult> => {
     const s = await call<ServerLatency>("/proof/latency");
     return {
+      generated_at: s.generated_at,
       p50_s: s.step_time_s?.p50 ?? null,
+      mean_s: s.step_time_s?.mean ?? null,
+      max_s: s.step_time_s?.max ?? null,
       target: s.latency_target_s,
       p50_within_target: s.p50_within_target,
       worst_fixture: s.worst_fixture,
+      worst_fixture_s: s.worst_fixture_s,
+      per_fixture: s.per_fixture,
+      planner: s.planner,
+      note: s.note ?? null,
+      reason: s.reason ?? null,
     };
   },
-  audit: () => call<{ entries: AuditEntry[] }>("/audit"),
-  verifyAudit: () =>
-    call<{ ok: boolean; checked: number }>("/audit/verify"),
-  vaultStatus: () =>
-    call<{ unlocked: boolean; has_grants: boolean }>("/vault/status"),
-  watches: () => call<{ watches: Watch[] }>("/monitor/watches"),
+
+  // ---- connectors ----
+  listConnectors: () => call<{ connectors: ConnectorRow[] }>("/connectors"),
+  connectorStatus: (name: string) =>
+    call<ConnectorLiveStatus>(`/connectors/${name}/status`),
+  enableConnector: (name: string) =>
+    call<ConnectorRow>(`/connectors/${name}/enable`, { method: "POST" }),
+  disableConnector: (name: string) =>
+    call<ConnectorRow>(`/connectors/${name}/disable`, { method: "POST" }),
+  createConnectorApproval: (body: {
+    task_id: string;
+    kind: "calendar_event" | "drive_upload";
+    summary?: string;
+    start?: string;
+    path?: string;
+  }) =>
+    call<{ approval_id: string; expires_at: number }>("/connectors/approvals", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gmailOffers: (maxResults = 20) =>
+    call<{ offers: GmailOffer[] }>(
+      `/connectors/gmail/offers?max_results=${maxResults}`,
+    ),
+  calendarFreebusy: (start: string, end: string) =>
+    call<FreebusyResult>(
+      `/connectors/calendar/freebusy?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
+  createCalendarEvent: (body: {
+    task_id: string;
+    approval_id: string;
+    summary: string;
+    start: string;
+    end: string;
+    description?: string;
+    location?: string;
+  }) =>
+    call<CalendarEventResult>("/connectors/calendar/events", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  driveResume: () => call<DriveFile>("/connectors/drive/resume"),
+  driveUpload: (body: {
+    task_id: string;
+    approval_id: string;
+    path: string;
+    name?: string;
+  }) =>
+    call<DriveFile>("/connectors/drive/upload", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  // ---- monitor ----
+  createWatch: (body: {
+    url: string;
+    selector: string;
+    condition: string;
+    interval_min: number;
+  }) =>
+    call<Watch>("/monitor/watches", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  watches: (status?: string) =>
+    call<{ watches: Watch[] }>(
+      status ? `/monitor/watches?status=${encodeURIComponent(status)}` : "/monitor/watches",
+    ),
+  getWatch: (id: string) => call<Watch>(`/monitor/watches/${id}`),
+  repairWatch: (id: string, body: { selector?: string; url?: string }) =>
+    call<Watch>(`/monitor/watches/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
   deleteWatch: (id: string) =>
     call<{ deleted: string }>(`/monitor/watches/${id}`, { method: "DELETE" }),
   muteWatch: (id: string, minutes = 60) =>
-    call(`/monitor/watches/${id}/mute`, {
+    call<Watch>(`/monitor/watches/${id}/mute`, {
       method: "POST",
       body: JSON.stringify({ minutes }),
     }),
   unmuteWatch: (id: string) =>
-    call(`/monitor/watches/${id}/unmute`, { method: "POST" }),
-  briefingLatest: () =>
-    call<{ id: string; created_at: number; cards: BriefingCard[] }>(
-      "/monitor/briefing/latest",
-    ),
+    call<Watch>(`/monitor/watches/${id}/unmute`, { method: "POST" }),
+  dueWatches: () => call<{ watches: Watch[] }>("/monitor/due"),
+  checkWatch: (id: string, found: boolean, value?: string | null) =>
+    call<WatchCheckResult>(`/monitor/watches/${id}/check`, {
+      method: "POST",
+      body: JSON.stringify({ found, value: value ?? null }),
+    }),
+  watchEvents: (watchId?: string, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (watchId) params.set("watch_id", watchId);
+    return call<{ events: WatchEvent[] }>(`/monitor/events?${params}`);
+  },
+  briefingLatest: () => call<Briefing>("/monitor/briefing/latest"),
   buildBriefing: () =>
-    call<{ id: string; created_at: number; cards: BriefingCard[] }>(
-      "/monitor/briefing",
-      { method: "POST" },
+    call<Briefing>("/monitor/briefing", { method: "POST" }),
+
+  // ---- audit ----
+  audit: (taskId?: string) =>
+    call<{ entries: AuditEntry[] }>(
+      taskId ? `/audit?task_id=${encodeURIComponent(taskId)}` : "/audit",
     ),
+  verifyAudit: () => call<AuditVerifyResult>("/audit/verify"),
+  exportAudit: () =>
+    call<{ exported_at: number; entries: AuditEntry[] }>("/audit/export"),
 };
