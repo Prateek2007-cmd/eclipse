@@ -53,6 +53,7 @@ MAX_PLANNER_CALLS_PER_STEP = 3
 RETRY_BACKOFF_S = (1, 2, 4)
 HANDOFF_TIMEOUT_S = 600  # plan §5.5 step 4: never wait forever
 ROLE_CLAIM_TTL_S = 600  # a role claim lives 10 minutes (the approval window)
+PENDING_APPROVAL_TTL_S = 600  # a pending approval lives 10 minutes (the approval window)
 
 # A step whose description mentions one of these is human-only.
 HUMAN_ONLY_MARKERS = (
@@ -102,7 +103,12 @@ def _set_task_status(conn, task_id: str, status: str) -> None:
 
 
 def _memory_facts(conn, goal: str) -> list[str]:
-    return keyword.recall(conn, goal, limit=10)
+    # recall() returns list[dict] (id/text/source/topic/score) —
+    # the prompt builders join strings, so extract the text here
+    # (Bug 1: passing the dicts through crashed plan_task with
+    # "TypeError: sequence item 0: expected str instance, dict
+    # found" — a 502 — whenever a stored fact matched the goal).
+    return [f["text"] for f in keyword.recall(conn, goal, limit=10)]
 
 
 def _is_local_only(constraints: str) -> bool:
@@ -385,6 +391,62 @@ def _consume_approval(conn, task_id: str, element_id: str | None = None,
     if chosen is None:
         return False
     cur = conn.execute("DELETE FROM grants WHERE id = ?", (chosen,))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def record_pending_approval(
+    conn, task_id: str, step: int, action: str,
+    element_id: str | None = None, role_id: str | None = None,
+    ttl_s: int = PENDING_APPROVAL_TTL_S,
+) -> str:
+    """Record a pending approval for a step that reached the human
+    gate (Bug 3 fix: the gate used to exist only in the UI — any
+    made-up approval_id minted a real grant). Returns the
+    approval_id the client must POST to /tasks/{id}/approve.
+
+    Idempotent per gate: a live pending approval for the same
+    (task, step, action) is reused, so re-executing a gated step
+    does not mint a second approval id for the same gate.
+    """
+    now = int(time.time())
+    existing = conn.execute(
+        "SELECT id FROM pending_approvals WHERE task_id = ? AND step = ?"
+        " AND action = ? AND expires_at > ? ORDER BY created_at ASC LIMIT 1",
+        (task_id, step, action, now),
+    ).fetchone()
+    if existing is not None:
+        return existing["id"]
+    approval_id = f"appr-{uuid.uuid4().hex[:12]}"
+    detail = {
+        k: v for k, v in {
+            "element_id": element_id, "role_id": role_id,
+        }.items() if v is not None
+    }
+    conn.execute(
+        "INSERT INTO pending_approvals (id, task_id, step, action, detail,"
+        " created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (approval_id, task_id, step, action, json.dumps(detail),
+         now, now + ttl_s),
+    )
+    conn.commit()
+    return approval_id
+
+
+def get_pending_approval(conn, approval_id: str) -> dict | None:
+    """The pending approval with this id, or None (unknown, or
+    already consumed)."""
+    row = conn.execute(
+        "SELECT * FROM pending_approvals WHERE id = ?", (approval_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def consume_pending_approval(conn, approval_id: str) -> bool:
+    """Consume (delete) a pending approval. Returns False when no
+    such approval exists — a replay finds nothing to consume."""
+    cur = conn.execute(
+        "DELETE FROM pending_approvals WHERE id = ?", (approval_id,))
     conn.commit()
     return cur.rowcount == 1
 
@@ -959,13 +1021,24 @@ def execute_step(
                 # without approval, so it must not hold the role.
                 if claim_id is not None:
                     _release_claim(conn, claim_id)
+                # The gate is RECORDED (Bug 3): the pending
+                # approval is the only id approve will accept, and
+                # it rides in the error so the caller can show the
+                # approval card with the real id.
+                approval_id = record_pending_approval(
+                    conn, task_id, n, "submit",
+                    element_id=action.get("element_id"),
+                    role_id=role_ctx["role_id"],
+                )
                 _set_task_status(conn, task_id, "ask_user")
                 _audit(conn, task_id, "task.approval_needed",
                        {"step": n, "action": action.get("action"),
-                        "element_id": action.get("element_id")})
+                        "element_id": action.get("element_id"),
+                        "approval_id": approval_id})
                 raise ValueError(
                     f"step {n} needs approval before submit"
-                    " (POST /tasks/{id}/approve with an approval_id)"
+                    " (POST /tasks/{id}/approve with approval_id "
+                    f"{approval_id})"
                 )
             _audit(conn, task_id, "task.approval_consumed", {"step": n})
         # Valid: record the step as executing and return the action.
@@ -1057,13 +1130,23 @@ def execute_step(
                 # reason, not a generic failure after 3 retries.
                 secret_tokens = [t for t in tokens if t in _fill.SECRET_PLACEHOLDERS]
                 if secret_tokens and any(t not in fill_map for t in secret_tokens):
+                    # The gate is RECORDED (Bug 3): like the submit
+                    # gate above, the pending approval is the only
+                    # id approve will accept — without it the user
+                    # could never approve past a fill denial.
+                    approval_id = record_pending_approval(
+                        conn, task_id, n, "vault fill",
+                    )
                     _set_task_status(conn, task_id, "ask_user")
                     _audit(conn, task_id, "task.fill_denied",
                            {"step": n, "tokens": secret_tokens,
-                            "reason": fill_denied_reason})
+                            "reason": fill_denied_reason,
+                            "approval_id": approval_id})
                     raise ValueError(
                         f"approval needed before the vault can fill: "
                         f"{fill_denied_reason or 'no fill available'}"
+                        " (POST /tasks/{id}/approve with approval_id "
+                        f"{approval_id})"
                     )
         return {
             "action": action,
