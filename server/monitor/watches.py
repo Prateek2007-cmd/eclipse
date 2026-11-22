@@ -239,22 +239,57 @@ def _check_watch_locked(conn, watch_id: str, found: bool,
     status = watch["status"]
 
     # M8: a muted watch does not fire — mute is enforced by the
-    # check itself, not only by due_watches.
+    # check itself, not only by due_watches. But a mute is a
+    # pause, not a permanent stop (B2): once muted_until has
+    # passed, the watch resumes as active — refusing the check
+    # here would leave it muted forever, because due_watches
+    # already hands it out as due.
     if status == "muted":
-        return {
-            "watch_id": watch_id,
-            "fired": False,
-            "broken": False,
-            "became_broken": False,
-            "status": "muted",
-            "reason": "muted",
-        }
+        muted_until = watch.get("muted_until")
+        if muted_until is not None and muted_until <= now:
+            status = "active"
+            conn.execute(
+                "UPDATE watches SET status = 'active',"
+                " muted_until = NULL, misses = 0 WHERE id = ?",
+                (watch_id,),
+            )
+        else:
+            return {
+                "watch_id": watch_id,
+                "fired": False,
+                "broken": False,
+                "became_broken": False,
+                "status": "muted",
+                "reason": "muted",
+            }
 
     if not found:
         # "disappeared" is the one condition where a missing
         # selector IS the event, not a health problem: the thing
         # was there, now it is gone.
         if condition == "disappeared" and had_value:
+            # M18: the 1-hour cooldown applies to every
+            # condition — a flapping element must not alert on
+            # every check. The state still updates (the thing
+            # really is gone), but the firing is suppressed and
+            # last_fired_at stays anchored at the first fire, so
+            # a suppressed re-fire cannot extend the window.
+            last_fired = watch.get("last_fired_at")
+            if last_fired is not None and now - last_fired < COOLDOWN_S:
+                conn.execute(
+                    "UPDATE watches SET misses = 0, last_checked = ?,"
+                    " last_value = NULL WHERE id = ?",
+                    (now, watch_id),
+                )
+                conn.commit()
+                return {
+                    "watch_id": watch_id,
+                    "fired": False,
+                    "broken": False,
+                    "became_broken": False,
+                    "status": status,
+                    "reason": "disappeared, inside the 1-hour cooldown",
+                }
             conn.execute(
                 "UPDATE watches SET misses = 0, last_checked = ?,"
                 " last_value = NULL, last_fired_at = ? WHERE id = ?",
@@ -437,6 +472,26 @@ def list_events(conn, watch_id: str | None = None,
     rows = conn.execute(
         f"SELECT * FROM watch_events {where}"
         " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_events_per_watch(conn, since: int | None = None) -> list[dict]:
+    """The latest event per watch (one row per watch), newest
+    first. The briefing uses this instead of a capped global
+    list: a flat LIMIT applies before the per-watch dedup, so
+    one chatty watch firing 200 times would crowd every other
+    watch out of the briefing (N7)."""
+    where = ""
+    params: list = []
+    if since is not None:
+        where = "WHERE created_at >= ?"
+        params.append(since)
+    rows = conn.execute(
+        "SELECT * FROM watch_events WHERE rowid IN ("
+        f" SELECT MAX(rowid) FROM watch_events {where} GROUP BY watch_id)"
+        " ORDER BY created_at DESC, rowid DESC",
         params,
     ).fetchall()
     return [dict(r) for r in rows]
