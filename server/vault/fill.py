@@ -36,6 +36,7 @@ for (when one was given).
 from __future__ import annotations
 
 import json
+import re
 
 from ..jobs import profile as profile_mod
 from . import grants as grant_store
@@ -83,13 +84,20 @@ def _token_belongs_to_element(token: str, element: dict | None) -> bool:
     """The placeholder↔element binding: the token belongs to the
     target element when it appears in the element's redacted
     value, or the element's label matches the token's field.
-    No element → no fill (fail-closed)."""
+    No element → no fill (fail-closed). The label match is on
+    WHOLE WORDS: the old substring match filled [PHONE_1] into
+    any element whose label contained "tel" — "Hotel
+    preferences" got the user's phone number, and "Username"
+    got their full name ("name" is a substring of "username")."""
     if element is None:
         return False
     if token in (element.get("value") or ""):
         return True
     label = f"{element.get('name') or ''} {element.get('text') or ''}".lower()
-    return any(word in label for word in TOKEN_LABELS.get(token, ()))
+    return any(
+        re.search(rf"\b{re.escape(word)}\b", label)
+        for word in TOKEN_LABELS.get(token, ())
+    )
 
 
 def build_fill_map(
@@ -139,8 +147,15 @@ def build_fill_map(
     grant = grant_store.GRANTS.get(task_id)
     if grant is None:
         return fill, "no vault grant for this task (unlock the vault for it)"
-    if grant.origin and origin and grant.origin != origin:
-        return fill, f"the card grant is for {grant.origin}, not {origin}"
+    # Origin scoping is fail-closed: a grant scoped to an origin
+    # fills ONLY there. An empty/unparseable origin cannot prove
+    # it is the grant's origin, so it is denied too (the old
+    # check skipped the comparison when the origin was empty).
+    if grant.origin and grant.origin != origin:
+        return fill, (
+            f"the card grant is for {grant.origin}, "
+            f"not {origin or 'an unknown origin'}"
+        )
     task_approvals = []
     for approval in approval_grants or []:
         try:

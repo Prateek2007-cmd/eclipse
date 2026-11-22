@@ -62,17 +62,59 @@ class VaultGrant:
 
 
 class GrantStore:
-    """The in-memory grant table."""
+    """The in-memory grant table.
 
-    def __init__(self):
+    A daemon sweeper thread purges expired grants (wiping their
+    card details) within one sweep interval of expiry. Without
+    it, an expired grant's card lingered in memory until some
+    read happened to touch the store — "wiped on expiry" was
+    only true on read, and a grant nobody re-read was never
+    wiped at all. The sweeper starts lazily on the first grant
+    (never at import), so a store that is never used spawns no
+    thread.
+    """
+
+    def __init__(self, sweep_interval_s: float = 60):
         self._grants: dict[str, VaultGrant] = {}
         self._lock = threading.Lock()
+        self._sweep_interval_s = sweep_interval_s
+        self._sweeper_started = False
+
+    def _start_sweeper(self) -> None:
+        if self._sweeper_started:
+            return
+        self._sweeper_started = True
+
+        def _sweep_forever() -> None:
+            while True:
+                time.sleep(self._sweep_interval_s)
+                self.purge_expired()
+
+        threading.Thread(
+            target=_sweep_forever, daemon=True, name="vault-grant-sweeper"
+        ).start()
+
+    def purge_expired(self) -> int:
+        """Wipe and drop every expired grant (TTL or idle).
+        Returns the count purged."""
+        now = int(time.time())
+        with self._lock:
+            doomed = [
+                grant_id
+                for grant_id, grant in self._grants.items()
+                if grant.expired(now)
+            ]
+            for grant_id in doomed:
+                self._grants[grant_id].wipe()
+                del self._grants[grant_id]
+            return len(doomed)
 
     def create(self, task_id: str, card: dict | None = None,
                origin: str | None = None) -> VaultGrant:
         grant = VaultGrant(task_id, card, origin)
         with self._lock:
             self._grants[grant.id] = grant
+            self._start_sweeper()
         return grant
 
     def get(self, task_id: str) -> VaultGrant | None:
