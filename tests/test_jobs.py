@@ -953,10 +953,19 @@ class TestJobsApi(unittest.TestCase):
                   "confirmation": "Application submitted."},
         )
         self.assertEqual(status, 409, body)
-        # Approve (creates a grant), then revoke it.
+        # Approve (creates a grant), then revoke it. Bug 3 fix:
+        # approve needs a LIVE pending approval — seed one in the
+        # server's DB first (the old test approved a bare id,
+        # which is exactly the hole the fix closes).
+        conn = db.connect(Path(self.tmp.name) / "eclipse.db")
+        try:
+            approval_id = loop.record_pending_approval(
+                conn, task_id, step=1, action="submit")
+        finally:
+            conn.close()
         status, body = _request(
             self.base, "POST", f"/tasks/{task_id}/approve",
-            body={"approval_id": "appr-1"},
+            body={"approval_id": approval_id},
         )
         self.assertEqual(status, 200, body)
         status, body = _request(

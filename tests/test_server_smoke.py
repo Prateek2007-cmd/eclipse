@@ -31,7 +31,7 @@ EXPECTED_TABLES = {
     "tasks", "steps", "checkpoints", "memory", "facts", "routines",
     "audit_log", "rag_chunks", "watches", "grants", "quota", "receipts",
     "mail_drafts", "mail_log", "connectors", "calendar_events",
-    "watch_events", "briefings",
+    "watch_events", "briefings", "pending_approvals",
 }
 
 
