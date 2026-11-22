@@ -146,6 +146,10 @@ def plan_task(task_id: str, _token: str = Depends(require_token)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except validate.ValidationError as exc:
         raise HTTPException(status_code=502, detail=f"planner plan invalid: {exc}") from exc
+    except ValueError as exc:
+        # A state refusal (re-planning a planned/finished task) is
+        # a conflict, not a planner failure.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - planner failures are 502s
         raise HTTPException(status_code=502, detail=f"planner failed: {exc}") from exc
     finally:
@@ -194,6 +198,10 @@ def verify_step(task_id: str, n: int, body: VerifyIn, _token: str = Depends(requ
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # A state refusal (verifying a step that never executed, or
+        # a stopped task) is a conflict, not a server error.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         conn.close()
     return result
@@ -229,21 +237,43 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
         from ..core import audit
 
         now = int(time.time())
+        # Idempotency (§5.4: one approval, one grant): the same
+        # approval_id must not mint a second grant — a retried
+        # POST (a double-click, a network retry) is one approval,
+        # not two submits. The approval_id rides in the grant
+        # detail (it is metadata, not scope — see
+        # loop._consume_approval). Checked before the audit entry,
+        # so a rejected replay leaves no approval in the trail.
+        for row in conn.execute(
+            "SELECT detail FROM grants WHERE origin = ? AND scope = 'approve'",
+            (task_id,),
+        ).fetchall():
+            try:
+                existing = json.loads(row["detail"] or "{}")
+            except (ValueError, TypeError):
+                existing = {}
+            if existing.get("approval_id") == body.approval_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"approval {body.approval_id} already recorded for this task",
+                )
         audit.append(
             conn, task_id, "task.approve",
             {"approval_id": body.approval_id},
         )
         detail = {
-            k: v for k, v in {
-                "step": body.step, "element_id": body.element_id,
-                "role_id": body.role_id,
-            }.items() if v is not None
+            "approval_id": body.approval_id,
+            **{
+                k: v for k, v in {
+                    "step": body.step, "element_id": body.element_id,
+                    "role_id": body.role_id,
+                }.items() if v is not None
+            },
         }
         conn.execute(
             "INSERT INTO grants (id, origin, scope, expires_at, created_at, detail)"
             " VALUES (?, ?, 'approve', ?, ?, ?)",
-            (uuid.uuid4().hex[:12], task_id, now + 600, now,
-             json.dumps(detail) if detail else None),
+            (uuid.uuid4().hex[:12], task_id, now + 600, now, json.dumps(detail)),
         )
         conn.execute(
             "UPDATE tasks SET status = 'planned', updated_at = ?"
@@ -251,9 +281,15 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
             (now, task_id),
         )
         conn.commit()
+        task = loop.get_task(conn, task_id)
+        status = task["status"] if task else "planned"
     finally:
         conn.close()
-    return {"task_id": task_id, "status": "planned", "approval_id": body.approval_id}
+    # The task's real status, not "planned" unconditionally: the
+    # UPDATE above only fires from ask_user, so approving a task
+    # in any other state used to report "planned" while the task
+    # stayed where it was.
+    return {"task_id": task_id, "status": status, "approval_id": body.approval_id}
 
 
 @router.delete("/tasks/{task_id}/grants")
@@ -290,7 +326,15 @@ def _set_status(task_id: str, status: str) -> dict:
 
 @router.post("/tasks/{task_id}/cancel")
 def cancel_task(task_id: str, _token: str = Depends(require_token)):
-    return _set_status(task_id, "cancelled")
+    result = _set_status(task_id, "cancelled")
+    # A cancelled task will never submit: release its role claims
+    # at once instead of holding the roles for the claim TTL.
+    conn = _conn()
+    try:
+        loop.release_claims_for_task(conn, task_id)
+    finally:
+        conn.close()
+    return result
 
 
 @router.post("/tasks/{task_id}/pause")
@@ -309,6 +353,10 @@ def resume_task(task_id: str, _token: str = Depends(require_token)):
         status = loop.resume_task(conn, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # A state refusal (resuming a done/cancelled/failed task)
+        # is a conflict, not a server error.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         conn.close()
     return {"task_id": task_id, "status": status}

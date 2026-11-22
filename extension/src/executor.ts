@@ -83,8 +83,10 @@ function isPlaceholder(text: string): boolean {
 /** A URL with the query string and fragment stripped. Non-http(s)
  *  URLs (about:blank, chrome://…) are returned as-is — their
  *  origin is the literal "null", so concatenating origin +
- *  pathname would produce nonsense ("nullblank"). */
-function safeUrl(raw: string): string {
+ *  pathname would produce nonsense ("nullblank"). Exported so the
+ *  content script's error path strips the page URL the same way —
+ *  a URL can carry a reset token or an email in its query string. */
+export function safeUrl(raw: string): string {
   try {
     const u = new URL(raw);
     if (u.protocol !== "http:" && u.protocol !== "https:") {
@@ -181,7 +183,15 @@ export async function executeAction(
       return { ok: false, detail: "navigate needs a full http(s) URL", url: pageUrl };
     }
     // Fail closed: without an allow-list, only the current site.
-    const host = new URL(url).hostname.toLowerCase();
+    // A URL that passes the regex can still be unparseable
+    // ("https://") — refuse it, do not let `new URL` throw out
+    // of the executor (a throw becomes a bare error response).
+    let host: string;
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      return { ok: false, detail: "navigate needs a valid http(s) URL", url: pageUrl };
+    }
     if (!hostAllowed(host, opts.allowedSites, currentHost)) {
       return { ok: false, detail: `navigate to ${host} is outside the allowed sites`, url: pageUrl };
     }
@@ -211,6 +221,13 @@ export async function executeAction(
   if (!node) {
     return { ok: false, detail: `element ${elId} is not in the current walk`, url: pageUrl };
   }
+  // The node map is a snapshot: the element may have left the page
+  // between the walk and the execute (a detached node's click()
+  // still fires its listeners). Never act on a node that is no
+  // longer in the live document.
+  if (!node.isConnected) {
+    return { ok: false, detail: `element ${elId} is no longer in the page`, url: pageUrl };
+  }
   const tag = node.tagName.toLowerCase();
   const type = (node.getAttribute("type") ?? "").toLowerCase();
 
@@ -218,6 +235,13 @@ export async function executeAction(
   // planner saw (tag + accessible name). A positional synthetic id
   // can go stale when the DOM moves between observe and execute.
   if (opts.expected) {
+    if (typeof opts.expected.tag !== "string") {
+      return {
+        ok: false,
+        detail: `element ${elId} has a malformed fingerprint (no tag); re-observe`,
+        url: pageUrl,
+      };
+    }
     if (tag !== opts.expected.tag.toLowerCase()) {
       return {
         ok: false,
@@ -234,6 +258,30 @@ export async function executeAction(
           url: pageUrl,
         };
       }
+    }
+    // The submit semantics must match too: a button the planner
+    // saw as type="button" outside a form must not have become a
+    // submit (same tag, same name, different consequence). The
+    // walker records type/inForm from the same attributes, so a
+    // mismatch means the DOM moved. Form membership here is
+    // closest("form") only — the walker records it that way; the
+    // form-attribute association is a submit-guard concern below.
+    if (opts.expected.type !== undefined && opts.expected.type !== type) {
+      return {
+        ok: false,
+        detail: `element ${elId} changed since the walk (type ${opts.expected.type} → ${type || "(none)"}); re-observe`,
+        url: pageUrl,
+      };
+    }
+    if (
+      opts.expected.inForm !== undefined &&
+      opts.expected.inForm !== (node.closest("form") !== null)
+    ) {
+      return {
+        ok: false,
+        detail: `element ${elId} changed since the walk (form membership changed); re-observe`,
+        url: pageUrl,
+      };
     }
   }
 
@@ -287,12 +335,16 @@ export async function executeAction(
     // also submits. And ANY button inside a form submits it — a
     // type="button" "Continue" in a multi-step form is a submit
     // (the common job-site pattern), even though its type says
-    // "button". A type="button" button NOT in a form (an "Apply
-    // now" that only opens the form) is not a submit.
-    const inForm = node.closest("form") !== null;
+    // "button". That covers <input type="button"> in a form too,
+    // and a button associated with a form through its `form`
+    // attribute (no ancestor <form>). A type="button" button with
+    // no form association (an "Apply now" that only opens the
+    // form) is not a submit.
+    const formOwner = (node as HTMLButtonElement).form;
+    const inForm = node.closest("form") !== null || formOwner != null;
     const isSubmit =
       (tag === "button" && (buttonType(node) === "submit" || inForm)) ||
-      (tag === "input" && (type === "submit" || type === "image"));
+      (tag === "input" && (type === "submit" || type === "image" || (type === "button" && inForm)));
     if (isSubmit) {
       // No taskId → no guard key → refuse the submit. Two different
       // tasks that omit taskId must not share one guard key.

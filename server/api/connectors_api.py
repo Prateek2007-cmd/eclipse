@@ -240,6 +240,16 @@ def create_approval(body: ApprovalIn, _token: str = Depends(require_token)):
             raise HTTPException(
                 status_code=422, detail="a Drive approval needs path"
             )
+        # The approval names the canonical path: the upload
+        # endpoint resolves the path before matching it, so an
+        # approval stored with `..` or a symlink in it could
+        # never be consumed. Validating here also fails fast on
+        # a path outside the home directory.
+        path = (
+            _validate_upload_path(body.path)
+            if body.kind == "drive_upload"
+            else body.path
+        )
         approval_id = f"appr_{uuid.uuid4().hex[:12]}"
         now = int(time.time())
         detail = {"kind": body.kind}
@@ -247,8 +257,8 @@ def create_approval(body: ApprovalIn, _token: str = Depends(require_token)):
             detail["summary"] = body.summary
         if body.start is not None:
             detail["start"] = body.start
-        if body.path is not None:
-            detail["path"] = body.path
+        if path is not None:
+            detail["path"] = path
         conn.execute(
             "INSERT INTO grants (id, origin, scope, expires_at, created_at, detail)"
             " VALUES (?, ?, 'approve', ?, ?, ?)",
@@ -305,7 +315,18 @@ def calendar_freebusy(
                 status_code=502,
                 detail="the calendar call returned no free/busy data",
             )
-        busy = calendars["primary"].get("busy") or []
+        primary = calendars["primary"]
+        if not isinstance(primary, dict):
+            raise HTTPException(
+                status_code=502,
+                detail="the calendar call returned no free/busy data",
+            )
+        busy = primary.get("busy") or []
+        if not isinstance(busy, list):
+            raise HTTPException(
+                status_code=502,
+                detail="the calendar call returned no free/busy data",
+            )
         return {"free": len(busy) == 0, "busy": busy}
     finally:
         conn.close()

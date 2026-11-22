@@ -76,7 +76,13 @@ def parse_resume(text: str) -> dict:
             if re.search(r"b\.?tech|b\.?e\.?|degree|b\.?sc", line, re.IGNORECASE):
                 chosen = m
                 break
-        profile["cgpa"] = float(chosen.group(1))
+        # A CGPA is out of 10 — a larger number is a percentage
+        # (or a typo), not a CGPA. Storing it would pass every
+        # CGPA requirement and print nonsense in mails, so it is
+        # treated as not found.
+        value = float(chosen.group(1))
+        if value <= 10:
+            profile["cgpa"] = value
     degree = re.search(r"\b(B\.?Tech|B\.?E\.?|BSc|M\.?Tech)\b[^,\n]{0,40}", text, re.IGNORECASE)
     if degree:
         profile["degree"] = degree.group(0).strip()

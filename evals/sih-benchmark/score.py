@@ -75,56 +75,79 @@ def score(results_path: Path) -> dict:
     return score_doc
 
 
+def _metric(value, target, **extra) -> dict:
+    """One scored metric. A missing value is not_measured, never
+    'measured' with a null — the old code stamped every metric
+    'measured' even when the benchmark file had no value for it."""
+    doc = {
+        "value": value,
+        "target": target,
+        "status": "measured" if value is not None else "not_measured",
+    }
+    doc.update(extra)
+    return doc
+
+
 def _score_benchmark(results_path: Path, results: dict) -> dict:
     """Score a benchmark-*.json: the metrics are real measurements."""
     m = results.get("metrics", {})
     detail = results.get("detail", {})
     loop_detail = detail.get("loop", {})
     pii = detail.get("pii", {})
+    # The grounding/latency notes must match the planner that
+    # actually ran: a live run labelled 'mock planner' (the old
+    # hardcoded notes) misreports real model measurements as loop
+    # overhead. benchmark.py writes planner strings starting with
+    # 'live ' for --live runs and 'mock ' otherwise.
+    live = str(loop_detail.get("planner", "")).startswith("live")
+    grounding_note = (
+        "live planner — real model grounding"
+        if live
+        else "mock planner — loop grounding, not a live model"
+    )
+    latency_note = (
+        "live gateway latency"
+        if live
+        else "loop overhead with a mock planner — not live gateway latency"
+    )
     score_doc = {
         "scored_at": results.get("generated_at"),
         "source": str(results_path),
         "sprint": results.get("sprint"),
         "fixtures": results.get("fixtures"),
         "metrics": {
-            "visual_grounding_first_try": {
-                "value": m.get("visual_grounding_first_try"),
-                "target": 0.85,
-                "status": "measured",
-                "note": "mock planner — loop grounding, not a live model",
-                "human_only_handoffs": loop_detail.get("human_only_handoffs"),
-            },
-            "pii_recall": {
-                "value": m.get("pii_recall"),
-                "target": 0.95,
-                "status": "measured",
-                "scope": "regex-detectable types",
-                "worst_fixture": pii.get("worst_fixture"),
-            },
-            "pii_precision": {
-                "value": m.get("pii_precision"),
-                "target": 0.90,
-                "status": "measured",
-                "scope": "regex-detectable types",
-            },
-            "redaction_recoverable_tokens": {
-                "value": m.get("redaction_recoverable_tokens"),
-                "target": 0,
-                "status": "measured",
-            },
-            "resource_mb": {
-                "value": m.get("resource_mb"),
-                "target": 300,
-                "status": "measured",
-                "note": "extension model download size on disk",
-            },
-            "latency_p50_s": {
-                "value": m.get("latency_p50_s"),
-                "target": 6,
-                "status": "measured",
-                "note": "loop overhead with a mock planner — not live gateway latency",
-                "worst_fixture": loop_detail.get("worst_fixture"),
-            },
+            "visual_grounding_first_try": _metric(
+                m.get("visual_grounding_first_try"),
+                0.85,
+                note=grounding_note,
+                human_only_handoffs=loop_detail.get("human_only_handoffs"),
+            ),
+            "pii_recall": _metric(
+                m.get("pii_recall"),
+                0.95,
+                scope="regex-detectable types",
+                worst_fixture=pii.get("worst_fixture"),
+            ),
+            "pii_precision": _metric(
+                m.get("pii_precision"),
+                0.90,
+                scope="regex-detectable types",
+            ),
+            "redaction_recoverable_tokens": _metric(
+                m.get("redaction_recoverable_tokens"),
+                0,
+            ),
+            "resource_mb": _metric(
+                m.get("resource_mb"),
+                300,
+                note="extension model download size on disk",
+            ),
+            "latency_p50_s": _metric(
+                m.get("latency_p50_s"),
+                6,
+                note=latency_note,
+                worst_fixture=loop_detail.get("worst_fixture"),
+            ),
         },
         "honesty": results.get("honesty"),
     }

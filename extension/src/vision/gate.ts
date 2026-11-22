@@ -44,7 +44,13 @@ export function evaluateGate(input: GateInput): GateVerdict {
   if (!input.egressAllowed) {
     failed.push(`egress denied: ${input.egressReason ?? "target not on allow-list"}`);
   }
-  const needsVision = input.taskKind === "image" || input.taskKind === "mixed";
+  const needsVision = input.taskKind !== "dom";
+  // NOTE: the comparison is "not dom", not "image or mixed" — an
+  // unknown taskKind (a typo, a future kind, a bad cast) defaults
+  // to the STRICTEST kind (vision required), not to dom-only.
+  // The old `=== "image" || === "mixed"` treated anything else
+  // as dom-only, so an unknown kind with failed OCR sailed
+  // through the gate.
   if (needsVision && !input.ocrOk) {
     failed.push("OCR failed on an image task — redaction cannot be verified");
   }

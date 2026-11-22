@@ -33,6 +33,18 @@ router = APIRouter(prefix="/proof", tags=["proof"])
 BENCHMARK_DIR = Path(__file__).resolve().parents[2] / "evals" / "sih-benchmark" / "results"
 WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
+# The outbound log lives in this server process only (in-memory,
+# cap 200 — see server/proof). Planner calls made by other
+# processes, e.g. the benchmark harness, are not in it: a 0 here
+# means "no call recorded by this server since it started", not
+# "no call was ever made".
+OUTBOUND_SCOPE = (
+    "Calls recorded by this server process since it started "
+    "(in-memory log, cap 200). Planner calls made by other "
+    "processes — e.g. the benchmark harness — are not included; "
+    "a live benchmark run records its own calls in its results file."
+)
+
 
 def _latest_benchmark() -> dict | None:
     files = sorted(
@@ -119,7 +131,7 @@ def what_was_sent(
     if q:
         ql = q.lower()
         rows = [r for r in rows if ql in r["endpoint"].lower() or ql in r["model"].lower()]
-    return {"count": len(rows), "entries": rows}
+    return {"count": len(rows), "entries": rows, "scope": OUTBOUND_SCOPE}
 
 
 @router.get("/egress")
@@ -132,11 +144,17 @@ def egress(_: str = Depends(require_token)):
         "hits": audit["hits"],
         "checked": audit["checked"],
         "patterns": audit["patterns"],
+        "scope": OUTBOUND_SCOPE,
         "note": (
             "A hit means a secret left the device. Stop the run and "
             "block the payload."
             if audit["hits"]
-            else "0 hits — no secret has left the device in the checked calls."
+            else (
+                "0 calls checked — no planner call has been recorded "
+                "by this server since it started."
+                if audit["checked"] == 0
+                else "0 hits — no secret has left the device in the checked calls."
+            )
         ),
     }
 
@@ -160,9 +178,31 @@ def redaction(_: str = Depends(require_token)):
     detail = bench.get("detail", {})
     red = detail.get("redaction", {})
     pii = detail.get("pii", {})
+    recoverable = red.get("recoverable_tokens")
+    # The note must state the measured number, not a hardcoded 0:
+    # the old text claimed "found 0 recoverable tokens" even when
+    # the run had found some (passed: false).
+    if recoverable is None:
+        note = "No redaction data in the latest benchmark run."
+    elif recoverable == 0:
+        note = (
+            "The second PII scan on every redacted payload found 0 "
+            "recoverable tokens."
+        )
+    else:
+        note = (
+            f"The second PII scan on every redacted payload found "
+            f"{recoverable} recoverable tokens — redaction FAILED "
+            f"its target of 0."
+        )
+    note += (
+        " Names, addresses, CVV, OTP and passwords are caught by "
+        "label/field, not by regex — they are listed under "
+        "label_based_not_regex."
+    )
     return {
         "generated_at": bench.get("generated_at"),
-        "recoverable_tokens": red.get("recoverable_tokens"),
+        "recoverable_tokens": recoverable,
         "passed": red.get("passed"),
         "pii_recall": pii.get("recall"),
         "pii_precision": pii.get("precision"),
@@ -172,12 +212,7 @@ def redaction(_: str = Depends(require_token)):
             for k, v in pii.get("per_fixture", {}).items()
             if v.get("label_based_not_regex")
         },
-        "note": (
-            "The second PII scan on every redacted payload found 0 "
-            "recoverable tokens. Names, addresses, CVV, OTP and "
-            "passwords are caught by label/field, not by regex — "
-            "they are listed under label_based_not_regex."
-        ),
+        "note": note,
     }
 
 
@@ -198,6 +233,20 @@ def latency(_: str = Depends(require_token)):
             "reason": "no benchmark run yet — run evals/sih-benchmark/benchmark.py",
         }
     loop_detail = bench.get("detail", {}).get("loop", {})
+    planner = str(loop_detail.get("planner", ""))
+    # The note must match the planner that actually ran: the old
+    # text always claimed mock timings, which mislabels a live run.
+    if planner.startswith("live"):
+        note = (
+            "Timings are real step latency from a live gateway run "
+            "(planner: " + planner + ")."
+        )
+    else:
+        note = (
+            "Timings are loop overhead with a mock planner. A live "
+            "gateway run is still needed for real step latency "
+            "(honest expectation 4-8s/step on free cloud models)."
+        )
     return {
         "generated_at": bench.get("generated_at"),
         "step_time_s": loop_detail.get("step_time_s"),
@@ -207,9 +256,5 @@ def latency(_: str = Depends(require_token)):
         "worst_fixture_s": loop_detail.get("worst_fixture_s"),
         "per_fixture": loop_detail.get("per_fixture"),
         "planner": loop_detail.get("planner"),
-        "note": (
-            "Timings are loop overhead with a mock planner. A live "
-            "gateway run is still needed for real step latency "
-            "(honest expectation 4-8s/step on free cloud models)."
-        ),
+        "note": note,
     }

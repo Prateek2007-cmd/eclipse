@@ -60,13 +60,19 @@ def validate_action(
     interactable_ids: set[str],
     allowed_sites: list[str] | None = None,
     elements: list[dict] | None = None,
+    current_url: str | None = None,
 ) -> dict:
     """Validate one planner action against the current observation.
 
     Returns the action unchanged when valid. Raises ValidationError
     otherwise. `allowed_sites` is the task's site allow-list for
-    navigate; None means "current site only" is not enforced — any
-    http(s) URL is accepted (used when the task has no site list).
+    navigate; with no allow-list, only the current site (from
+    `current_url`) is permitted — the ACTION_SCHEMA already
+    promises "the allowed-sites list (or the current site)", and
+    without this a page that talks the planner into navigating
+    elsewhere (injection via page text) would succeed. When
+    neither is known, any http(s) URL is accepted (the old
+    behaviour — callers that know the current page must pass it).
     `elements` (the full observation list) enables the role check
     for "type" and the visibility check for "scroll".
     """
@@ -113,11 +119,19 @@ def validate_action(
         url = action.get("url")
         if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
             raise ValidationError("navigate needs a full http(s) URL")
+        # hostname excludes the port (urlparse().netloc does not).
+        host = (urlparse(url).hostname or "").lower()
         if allowed_sites:
-            # hostname excludes the port (urlparse().netloc does not).
-            host = (urlparse(url).hostname or "").lower()
             if not any(host == s.lower() or host.endswith("." + s.lower()) for s in allowed_sites):
                 raise ValidationError(f"navigate to {host} is outside the allowed sites")
+        elif current_url:
+            current_host = (urlparse(current_url).hostname or "").lower()
+            if current_host and not (
+                host == current_host or host.endswith("." + current_host)
+            ):
+                raise ValidationError(
+                    f"navigate to {host} is outside the current site ({current_host})"
+                )
     if act == "wait":
         secs = action.get("seconds")
         if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 1 <= secs <= 30:

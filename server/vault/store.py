@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import stat
 import threading
 import time
@@ -35,6 +36,21 @@ PBKDF2_ITERATIONS = 600_000
 SALT_BYTES = 16
 # The key is dropped after 10 minutes of idle (§6.7).
 IDLE_LOCK_S = 10 * 60
+
+# Fields that must never be stored (§6.7: card numbers and CVVs
+# are entered per task, never stored; OTPs are human-only, never
+# stored). Matched as a SUBSTRING, not an exact field name: an
+# exact-match list ("card_number", "card", "cvv") is bypassed by
+# "cardnumber" or "cc_number", and the card number then lands in
+# the vault file. The API layer refuses these with a 400 and this
+# module refuses them again as the last line of defence.
+NEVER_STORED_RE = re.compile(r"card|cvv|cvc|cc.?num|otp", re.IGNORECASE)
+
+
+def is_never_stored_field(field: str) -> bool:
+    """True when a field name holds a value that must never be
+    stored in the vault file (card numbers, CVVs, OTPs)."""
+    return NEVER_STORED_RE.search(field) is not None
 
 _lock = threading.Lock()
 
@@ -65,7 +81,13 @@ def _read_header(path: str) -> dict | None:
 
 def _write_file(path: str, header: dict) -> None:
     tmp = f"{path}.tmp-{os.getpid()}-{int(time.time() * 1000)}"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # Create the temp file 0600 from the first byte (os.open with
+    # the mode): the old open() + chmod() left a window where the
+    # temp file had the process umask's permissions (0660 under
+    # umask 002). The mode is umask-proof — 0600 has no group or
+    # other bits to strip. The chmod stays as a belt-and-braces.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(header, f)
     os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
     os.replace(tmp, path)
@@ -134,10 +156,20 @@ class Vault:
             header = _read_header(self.path)
             if header is None:
                 raise VaultError("no vault yet — create one first")
-            salt = base64.b64decode(header["salt"])
+            # A valid-JSON file with missing or mistyped keys used
+            # to raise a bare KeyError/AttributeError here (an
+            # unhandled 500 in the API) — it is a corrupt vault.
+            salt_b64 = header.get("salt")
+            token = header.get("entries")
+            if not isinstance(salt_b64, str) or not isinstance(token, str):
+                raise VaultError("vault file is corrupt or unreadable")
+            try:
+                salt = base64.b64decode(salt_b64)
+            except (ValueError, TypeError) as exc:
+                raise VaultError("vault file is corrupt or unreadable") from exc
             fernet = Fernet(_derive_key(password, salt))
             try:
-                fernet.decrypt(header["entries"].encode())
+                fernet.decrypt(token.encode())
             except InvalidToken:
                 raise VaultError("wrong password") from None
             self._salt = salt
@@ -153,6 +185,13 @@ class Vault:
     def _entries(self) -> dict:
         if self._fernet is None:
             raise VaultError("vault is locked")
+        # The idle lock is enforced HERE, on the data path — not
+        # only in the `unlocked` property. The old code let any
+        # caller that read without checking `unlocked` first pull
+        # passwords out of an idle-timed-out vault.
+        if int(time.time()) - self._last_used_at >= IDLE_LOCK_S:
+            self.lock()
+            raise VaultError("vault is locked (idle timeout)")
         self._last_used_at = int(time.time())
         header = _read_header(self.path)
         if header is None:
@@ -170,7 +209,15 @@ class Vault:
 
     def store_password(self, origin: str, field: str, value: str) -> None:
         """Store an opted-in login password for (origin, field).
-        Only call this when the user opted in for this site."""
+        Only call this when the user opted in for this site.
+        Card numbers, CVVs and OTPs are refused here as well as
+        in the API — the store is the last line of defence, and
+        a future caller must not be able to store a card number
+        by picking a field name the API's list does not know."""
+        if is_never_stored_field(field):
+            raise VaultError(
+                f"field {field} is never stored (enter it per task)"
+            )
         with _lock:
             entries = self._entries()
             entries.setdefault(origin, {})[field] = value

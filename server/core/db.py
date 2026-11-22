@@ -142,6 +142,23 @@ def migrate(db_path: Path | None = None) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_task_role"
                 " ON receipts(task_id, role_id)"
             )
+            # Audit fix: at most one SUBMITTED receipt per role,
+            # whatever path wrote it — defence in depth behind the
+            # loop-level role claim and the idempotent receipt
+            # write. Older duplicate submitted receipts (written
+            # before the claim existed) are removed first, keeping
+            # the newest, or the index creation would fail and the
+            # server would not start on an existing DB.
+            conn.execute(
+                "DELETE FROM receipts WHERE status = 'submitted'"
+                " AND rowid NOT IN (SELECT MAX(rowid) FROM receipts"
+                " WHERE status = 'submitted' GROUP BY role_id)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS"
+                " idx_receipts_role_submitted"
+                " ON receipts(role_id) WHERE status = 'submitted'"
+            )
             # Sprint 5: cold-mail drafts + log (Flow 2).
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'")}

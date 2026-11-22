@@ -74,6 +74,19 @@ def draft_body(role: dict, profile: dict, reasons: list[str]) -> str:
     return "\n".join(lines)
 
 
+def has_bounced(conn, recipient: str) -> bool:
+    """True when any mail to this address bounced (§7.1) — the
+    mailbox does not exist, so no future send to it may go out,
+    for any role. One definition, used by the draft check and by
+    the send-time check alike."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM mail_log"
+        " WHERE LOWER(recipient) = ? AND status = 'bounced'",
+        (recipient.strip().lower(),),
+    ).fetchone()
+    return bool(row["c"])
+
+
 def already_mailed(conn, recipient: str, role_id: str) -> bool:
     """True when a live draft already exists for (recipient,
     role_id), a mail was already sent for it, or a mail to this
@@ -99,12 +112,7 @@ def already_mailed(conn, recipient: str, role_id: str) -> bool:
     ).fetchone()
     if row["c"]:
         return True
-    row = conn.execute(
-        "SELECT COUNT(*) AS c FROM mail_log"
-        " WHERE LOWER(recipient) = ? AND status = 'bounced'",
-        (recipient,),
-    ).fetchone()
-    return bool(row["c"])
+    return has_bounced(conn, recipient)
 
 
 def create_draft(conn, task_id: str, recipient: str, role: dict,
@@ -117,6 +125,11 @@ def create_draft(conn, task_id: str, recipient: str, role: dict,
     role_id = role.get("id") or role.get("url")
     if not role_id:
         raise ValueError("role has no id (dedup needs one)")
+    # The unique index is on LOWER(recipient) — it does not trim —
+    # so a stray space would slip past the index and mail the same
+    # recruiter twice. Normalise before the check and the insert,
+    # so the stored value is the canonical one the index sees.
+    recipient = recipient.strip()
     if already_mailed(conn, recipient, role_id):
         return None
     draft_id = uuid.uuid4().hex[:12]
@@ -173,10 +186,15 @@ def approve_draft(conn, draft_id: str) -> bool:
 
 
 def update_draft_body(conn, draft_id: str, body: str) -> bool:
-    """The user edits a draft before approving it."""
+    """The user edits a draft before approving it. Editing an
+    APPROVED draft revokes the approval: the approval was for
+    the old body, so the draft goes back to 'draft' and must be
+    approved again before it can be sent — otherwise the edited
+    body would go out under an approval granted for different
+    words."""
     now = int(time.time())
     cur = conn.execute(
-        "UPDATE mail_drafts SET body = ?, updated_at = ?"
+        "UPDATE mail_drafts SET body = ?, status = 'draft', updated_at = ?"
         " WHERE id = ? AND status IN ('draft', 'approved')",
         (body, now, draft_id),
     )

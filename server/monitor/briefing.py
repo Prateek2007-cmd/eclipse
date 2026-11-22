@@ -1,7 +1,9 @@
 """Morning briefing (Sprint 8, plan §8.4).
 
-5–10 BriefingCards: watch firings since the last briefing
-plus one inbox scan (Gmail connector, read-only). Generated on
+Up to 10 BriefingCards: watch firings since the last briefing
+plus one inbox scan (Gmail connector, read-only) — and at least
+one card even on a quiet morning, never a silent empty briefing.
+Generated on
 demand (the user opens the workspace) and once each morning
 while Chrome is open. Each card has one action button.
 
@@ -25,13 +27,14 @@ def build_briefing(conn, gmail=None) -> dict:
     action_label}]}. The briefing is stored so the workspace can
     show the latest one without rebuilding it.
     """
+    from server.connectors import registry as conn_registry
     from server.monitor import watches as watch_mod
 
     now = int(time.time())
     since = now - SINCE_S
     cards: list[dict] = []
 
-    events = watch_mod.list_events(conn, limit=200, since=since)
+    events = watch_mod.latest_events_per_watch(conn, since=since)
     seen_watches: set[str] = set()
     for event in events:
         watch = watch_mod.get_watch(conn, event["watch_id"])
@@ -53,6 +56,10 @@ def build_briefing(conn, gmail=None) -> dict:
                 }
             )
         elif event["kind"] == "broken":
+            # The watch may have recovered since it broke — a
+            # broken card is only true while it is still broken.
+            if watch["status"] != "broken":
+                continue
             cards.append(
                 {
                     "kind": "watch_broken",
@@ -68,7 +75,12 @@ def build_briefing(conn, gmail=None) -> dict:
         if len(cards) >= MAX_CARDS:
             break
 
-    if len(cards) < MAX_CARDS:
+    # A disabled connector refuses work — the briefing must not
+    # scan an inbox the user turned off. Fail closed, like the
+    # API's _require_on: a missing registry row is not "on".
+    gmail_reg = conn_registry.get(conn, "gmail")
+    gmail_off = gmail_reg is None or not gmail_reg["enabled"]
+    if len(cards) < MAX_CARDS and not gmail_off:
         try:
             from server.connectors.gmail import GmailConnector
 
@@ -101,6 +113,22 @@ def build_briefing(conn, gmail=None) -> dict:
                     "action_label": "",
                 }
             )
+
+    if not cards:
+        # Never a silent empty briefing: when nothing fired and
+        # no offer mail arrived, say so on a card.
+        cards.append(
+            {
+                "kind": "quiet",
+                "title": "Nothing new this morning",
+                "body": (
+                    "No watched page changed and no new offer "
+                    "mail arrived."
+                ),
+                "action": None,
+                "action_label": "",
+            }
+        )
 
     briefing_id = f"br_{uuid.uuid4().hex[:12]}"
     conn.execute(

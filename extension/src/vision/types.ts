@@ -52,6 +52,8 @@ export type PiiType =
   | "phone"
   | "aadhaar"
   | "pan"
+  | "upi"
+  | "passport"
   | "card_number"
   | "cvv"
   | "otp"

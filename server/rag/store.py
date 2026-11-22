@@ -16,9 +16,11 @@ Relevance threshold: cosine ≥ 0.6. Below it, the query returns
 "no relevant memory" instead of a weak match (a weak match is
 worse than none — it injects noise into the planner prompt).
 
-Forget: DELETE /memory/{key} removes the fact and the chunk, so
-it is excluded from future retrieval. Reset wipes all memory
-after export + double confirm (the API, not this module).
+Forget: DELETE /rag/{chunk_id} removes the chunk and its
+vector, so it is excluded from future retrieval. Keyword facts
+are forgotten separately via DELETE /memory/facts/{fact_id} —
+a fact and a chunk are separate rows, so deleting one does not
+delete the other. There is no whole-memory reset endpoint.
 
 The vector table is a sqlite-vec virtual table (vec0) with 384
 dimensions, float32. The chunks table holds the text + metadata;
