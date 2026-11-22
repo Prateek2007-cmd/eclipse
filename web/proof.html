@@ -3,121 +3,345 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Eclipse proof — SIH metrics, egress audit, redaction proof, latency and every outbound payload, from real benchmark runs only.">
 <title>Eclipse — Proof</title>
 <style>
   :root {
-    --bg: #070B12;        /* 60% */
-    --surface: #12212B;   /* 30% */
-    --accent: #FF6B35;    /* 10% */
-    --text: #E8EEF4;
-    --muted: #8FA3B0;
-    --border: #22384A;
-    --good: #3FB27F;
-    --bad: #E5484D;
+    --bg: #070B12;
+    --bg-raised: #0B111C;
+    --surface: #12212B;
+    --surface-hover: #162B38;
+    --border: #1E3A4A;
+    --accent: #FF6B35;
+    --on-accent: #1A0D05;
+    --text: #E8F0F2;
+    --secondary: #9FB3BC;
+    --muted: #7E97A3;
+    --success: #34D399;
+    --warning: #FBBF24;
+    --danger: #F87171;
+    --info: #60A5FA;
+    --shadow: rgb(0 0 0 / .35);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-pill: 999px;
+    --ease: 200ms ease-out;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { padding: 28px 32px 8px; }
-  header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .02em; }
-  header h1 span { color: var(--accent); }
-  header p { margin: 0; color: var(--muted); max-width: 720px; }
-  main { padding: 20px 32px 48px; display: grid; gap: 20px;
-    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
-  section { background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 18px 20px; }
-  section.full { grid-column: 1 / -1; }
-  h2 { margin: 0 0 4px; font-size: 17px; }
-  .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
-  .caveat { color: var(--text); font-size: 14px; margin: 0 0 14px;
-    border-left: 3px solid var(--accent); padding-left: 10px; }
-  .row { display: flex; justify-content: space-between; gap: 12px;
-    padding: 7px 0; border-top: 1px solid var(--border); }
-  .row:first-of-type { border-top: 0; }
-  .row b { font-variant-numeric: tabular-nums; }
-  .pass { color: var(--good); font-weight: 700; }
-  .fail { color: var(--bad); font-weight: 700; }
-  .bar { height: 8px; border-radius: 4px; background: var(--border);
-    overflow: hidden; margin: 4px 0 12px; }
-  .bar i { display: block; height: 100%; background: var(--accent); }
-  .bar i.good { background: var(--good); }
-  .bar i.worst { background: var(--bad); }
-  .fixture-bar { display: grid; grid-template-columns: 140px 1fr 64px;
-    gap: 10px; align-items: center; padding: 4px 0; font-size: 13px; }
-  .fixture-bar .fbar { height: 8px; border-radius: 4px;
-    background: var(--border); overflow: hidden; }
-  .fixture-bar .fbar i { display: block; height: 100%;
-    background: var(--accent); }
-  .fixture-bar.worst .fbar i { background: var(--bad); }
-  .fixture-bar.worst .fname { color: var(--bad); font-weight: 700; }
-  .fixture-bar .ftime { text-align: right; font-variant-numeric: tabular-nums; }
-  pre { background: var(--bg); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px; overflow: auto; font-size: 12.5px;
-    max-height: 260px; white-space: pre-wrap; word-break: break-word; }
+  html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  ::selection { background: var(--accent); color: var(--on-accent); }
+  a { color: var(--text); text-decoration-thickness: from-font; text-underline-offset: 3px; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 700;
+    text-decoration: none;
+    padding: 10px 16px;
+    border-radius: 0 0 var(--radius-sm) 0;
+  }
+  .skip-link:focus { left: 0; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px 64px; }
+
+  /* Floating pill nav — Eclipse wordmark, links back to the
+   * workspace and the landing page. Accent stays off the nav:
+   * it is the primary action's colour only. */
+  nav {
+    position: sticky;
+    top: 16px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 10px 12px 10px 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--bg-raised) 88%, transparent);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 8px 24px var(--shadow);
+  }
+  nav .wordmark {
+    margin-right: auto;
+    font-size: 1.125rem;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    text-decoration: none;
+  }
+  nav .wordmark span { color: var(--accent); }
+  nav a.navlink, nav span.current {
+    padding: 6px 14px;
+    border-radius: var(--radius-pill);
+    color: var(--secondary);
+    font-size: .9375rem;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background-color var(--ease), color var(--ease);
+  }
+  nav a.navlink:hover { background: var(--surface-hover); color: var(--text); }
+  nav span.current { background: var(--surface); color: var(--text); font-weight: 600; }
+
+  header { padding: 56px 0 8px; }
+  header h1 {
+    margin: 0 0 12px;
+    font-size: 2rem;
+    line-height: 1.15;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+  }
+  header p { margin: 0; color: var(--secondary); max-width: 70ch; text-wrap: pretty; }
+
+  /* Token panel. The token lives in a page variable only — it is
+   * never written to storage and never logged. */
+  .token-panel {
+    display: flex;
+    gap: 12px;
+    align-items: end;
+    flex-wrap: wrap;
+    margin: 32px 0 24px;
+    padding: 20px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .token-panel .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 240px; max-width: 460px; }
+  .token-panel .token-note { flex-basis: 100%; margin: 0; color: var(--muted); font-size: .8125rem; }
+  .token-error { display: none; flex-basis: 100%; margin: 0; color: var(--danger); font-size: .875rem; }
+  .token-error.show { display: block; }
+  label { color: var(--secondary); font-size: .8125rem; font-weight: 600; }
+
   input[type=text], input[type=password], input[type=search] {
-    background: var(--bg); border: 1px solid var(--border);
-    color: var(--text); border-radius: 8px; padding: 8px 10px;
-    font: inherit; width: 100%; }
-  button { background: var(--accent); color: #14080A; border: 0;
-    border-radius: 8px; padding: 8px 16px; font: inherit; font-weight: 700;
-    cursor: pointer; }
-  button.ghost { background: transparent; color: var(--text);
-    border: 1px solid var(--border); font-weight: 400; }
-  .tokenrow { display: flex; gap: 10px; padding: 16px 32px 0;
-    align-items: end; flex-wrap: wrap; }
-  .tokenrow .field { display: flex; flex-direction: column; gap: 4px;
-    flex: 1; max-width: 420px; min-width: 220px; }
-  label { color: var(--muted); font-size: 13px; }
-  .note { color: var(--muted); font-size: 13px; }
-  .empty { color: var(--muted); }
-  .error { color: var(--bad); }
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font: inherit;
+    width: 100%;
+    transition: border-color var(--ease), background-color var(--ease);
+  }
+  input[type=text]:hover, input[type=password]:hover, input[type=search]:hover { border-color: var(--surface-hover); }
+  input[type=text]:focus-visible, input[type=password]:focus-visible, input[type=search]:focus-visible {
+    border-color: var(--accent);
+  }
+
+  button {
+    background: var(--accent);
+    color: var(--on-accent);
+    border: 0;
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter var(--ease), background-color var(--ease), border-color var(--ease);
+  }
+  button:hover { filter: brightness(1.08); }
+  button:active { filter: brightness(.96); }
+  button.ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-weight: 600;
+  }
+  button.ghost:hover { background: var(--surface-hover); filter: none; }
+
+  main {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: repeat(12, 1fr);
+    align-items: start;
+  }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 20px 22px;
+  }
+  #metrics { grid-column: span 8; }
+  #egress { grid-column: span 4; }
+  #redaction, #latency, #sent { grid-column: span 12; }
+  h2 { margin: 0 0 4px; font-size: 1.125rem; line-height: 1.3; letter-spacing: -.005em; }
+  .sub { color: var(--secondary); font-size: .875rem; margin: 0 0 16px; }
+
+  /* Honesty caveat, as reported by the benchmark — never edited,
+   * never softened. Warning edge: the numbers carry a condition. */
+  .caveat {
+    color: var(--text);
+    font-size: .9375rem;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    background: var(--bg-raised);
+    border-left: 3px solid var(--warning);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  /* Metric tiles, same shape as the landing page's metrics. */
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .tile {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 16px;
+  }
+  .tile .tlabel { color: var(--secondary); font-size: .8125rem; line-height: 1.4; margin: 0 0 8px; min-height: 2.8em; }
+  .tile .tvalue { display: block; font-size: 2rem; line-height: 1.1; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  .tile .ttarget { color: var(--muted); font-size: .8125rem; margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+  .tile .tstatus { font-size: .8125rem; font-weight: 700; margin: 8px 0 0; }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+  }
+  .row:first-of-type { border-top: 0; }
+  .row b { font-variant-numeric: tabular-nums; text-align: right; }
+  .pass { color: var(--success); }
+  .fail { color: var(--danger); }
+  .note { color: var(--muted); font-size: .8125rem; margin: 14px 0 0; text-wrap: pretty; }
+  .empty { color: var(--muted); margin: 0; }
+  .error { color: var(--danger); margin: 0; }
+
+  .bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; margin: 4px 0 16px; }
+  .bar i { display: block; height: 100%; background: var(--warning); }
+  .bar i.good { background: var(--success); }
+  .fixture-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 160px) 1fr 64px;
+    gap: 10px;
+    align-items: center;
+    padding: 5px 0;
+    font-size: .8125rem;
+  }
+  .fixture-bar .fname { overflow-wrap: break-word; }
+  .fixture-bar .fbar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+  .fixture-bar .fbar i { display: block; height: 100%; background: var(--info); }
+  .fixture-bar.worst .fbar i { background: var(--danger); }
+  .fixture-bar.worst .fname { color: var(--danger); font-weight: 700; }
+  .fixture-bar .ftime { text-align: right; font-variant-numeric: tabular-nums; }
+
+  pre {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    overflow: auto;
+    font: .8125rem/1.5 ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    max-height: 260px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  #sent .filter { margin-bottom: 4px; }
+  #sent .filter label { display: block; margin-bottom: 6px; }
+  .sent-entry { padding: 4px 0; }
+  .sent-entry .row { border-top: 1px solid var(--border); }
+  .sent-entry:first-of-type .row { border-top: 0; }
+  .sent-entry pre { margin: 0 0 8px; }
+  .sent-meta { overflow-wrap: break-word; font-size: .875rem; }
+
+  footer { color: var(--muted); font-size: .875rem; margin-top: 48px; }
+
+  @media (max-width: 900px) {
+    #metrics, #egress { grid-column: span 12; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 0 16px 48px; }
+    header { padding-top: 40px; }
+    header h1 { font-size: 1.75rem; }
+    nav { padding: 8px 10px 8px 16px; gap: 4px; }
+    nav a.navlink, nav span.current { padding: 6px 10px; font-size: .875rem; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .fixture-bar { grid-template-columns: minmax(0, 110px) 1fr 56px; }
+  }
+  @media (max-width: 420px) {
+    .tiles { grid-template-columns: 1fr; }
+    .tile .tlabel { min-height: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; }
+  }
 </style>
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to main content</a>
+<div class="wrap">
+<nav aria-label="Eclipse">
+  <a class="wordmark" href="landing.html">Eclipse<span>.</span></a>
+  <a class="navlink" href="/workspace">Workspace</a>
+  <a class="navlink" href="landing.html">Landing</a>
+  <span class="current" aria-current="page">Proof</span>
+</nav>
 <header>
-  <h1>ECLIPSE <span>— proof</span></h1>
+  <h1>Proof</h1>
   <p>Every number here comes from a real benchmark run or a real outbound
   call. Nothing is typed in by hand. When a run has not happened yet,
   the panel says so instead of showing a number.</p>
 </header>
-<div class="tokenrow">
+<div class="token-panel">
   <div class="field">
     <label for="token">Server token — from data/.eclipse-token</label>
-    <input type="password" id="token" autocomplete="off">
+    <input type="password" id="token" autocomplete="off" aria-describedby="token-note">
   </div>
   <button id="show-token" class="ghost" type="button">Show</button>
-  <button id="load">Load proof</button>
+  <button id="load" type="button">Load proof</button>
+  <p class="token-error" id="token-error" role="alert">Paste the server token first.</p>
+  <p class="token-note" id="token-note">Kept only in this tab&rsquo;s memory while the page is open — never saved, never logged.</p>
 </div>
-<main>
-  <section id="metrics">
-    <h2>SIH metrics</h2>
+<main id="main">
+  <section id="metrics" aria-labelledby="metrics-h">
+    <h2 id="metrics-h">SIH metrics</h2>
     <p class="sub">From the latest benchmark run. Targets in brackets.</p>
-    <div id="metrics-body"><p class="empty">Enter the token and load.</p></div>
+    <div id="metrics-body" aria-live="polite"><p class="empty">Enter the token and load.</p></div>
   </section>
-  <section id="egress">
-    <h2>Egress audit</h2>
+  <section id="egress" aria-labelledby="egress-h">
+    <h2 id="egress-h">Egress audit</h2>
     <p class="sub">Live grep of every outbound planner payload for secrets.</p>
-    <div id="egress-body"><p class="empty">—</p></div>
+    <div id="egress-body" aria-live="polite"><p class="empty">—</p></div>
   </section>
-  <section id="redaction" class="full">
-    <h2>Redaction proof</h2>
+  <section id="redaction" aria-labelledby="redaction-h">
+    <h2 id="redaction-h">Redaction proof</h2>
     <p class="sub">Second PII scan on every redacted payload: 0 recoverable tokens.</p>
-    <div id="redaction-body"><p class="empty">—</p></div>
+    <div id="redaction-body" aria-live="polite"><p class="empty">—</p></div>
   </section>
-  <section id="latency">
-    <h2>Latency waterfall</h2>
+  <section id="latency" aria-labelledby="latency-h">
+    <h2 id="latency-h">Latency waterfall</h2>
     <p class="sub">Per-fixture step timings from the latest benchmark run. Worst fixture in red.</p>
-    <div id="latency-body"><p class="empty">—</p></div>
+    <div id="latency-body" aria-live="polite"><p class="empty">—</p></div>
   </section>
-  <section id="sent" class="full">
-    <h2>What was sent</h2>
+  <section id="sent" aria-labelledby="sent-h">
+    <h2 id="sent-h">What was sent</h2>
     <p class="sub">Every outbound planner payload, redacted. Copy copies redacted only —
     the stored text is the redacted text.</p>
-    <label for="q">Filter by endpoint or model</label>
-    <input type="search" id="q" placeholder="Filter by endpoint or model…">
-    <div id="sent-body" style="margin-top:12px"><p class="empty">—</p></div>
+    <div class="filter">
+      <label for="q">Filter by endpoint or model</label>
+      <input type="search" id="q" placeholder="Filter by endpoint or model…">
+    </div>
+    <div id="sent-body" aria-live="polite" style="margin-top:12px"><p class="empty">—</p></div>
   </section>
 </main>
+<footer>Eclipse · SIH 26171</footer>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 let token = "";
@@ -138,7 +362,19 @@ function pct(x) {
   return (typeof x === "number" && isFinite(x)) ? (x * 100).toFixed(1) + "%" : "—";
 }
 function row(label, value, cls) {
-  return `<div class="row"><span>${esc(label)}</span><b class="${cls||""}">${esc(value)}</b></div>`;
+  // Pass/fail is marked with a glyph as well as colour, so it never
+  // relies on colour alone.
+  const mark = cls === "pass" ? "✓ " : cls === "fail" ? "✗ " : "";
+  return `<div class="row"><span>${esc(label)}</span><b class="${cls||""}">${mark}${esc(value)}</b></div>`;
+}
+// One metric tile: label, big value, target line, pass/fail status
+// in words as well as colour.
+function tile(label, value, target, ok) {
+  return `<div class="tile">
+    <p class="tlabel">${esc(label)}</p>
+    <b class="tvalue">${esc(value)}</b>
+    <p class="ttarget">${esc(target)}</p>
+    <p class="tstatus ${ok ? "pass" : "fail"}">${ok ? "✓ Pass" : "✗ Fail"}</p></div>`;
 }
 function clearAll() {
   for (const id of ["metrics-body", "egress-body", "redaction-body", "latency-body", "sent-body"]) {
@@ -147,7 +383,12 @@ function clearAll() {
 }
 async function loadAll() {
   token = $("token").value.trim();
-  if (!token) { alert("Paste the server token first."); return; }
+  if (!token) {
+    $("token-error").classList.add("show");
+    $("token").focus();
+    return;
+  }
+  $("token-error").classList.remove("show");
   clearAll();
   try {
     const m = await get("/proof/metrics");
@@ -156,13 +397,15 @@ async function loadAll() {
     } else {
       const x = m.metrics, t = m.targets;
       $("metrics-body").innerHTML =
-        `<p class="caveat">${esc(m.honesty || "")}</p>` +
-        row("Visual grounding, first try (mock planner)", pct(x.visual_grounding_first_try) + ` (target ${pct(t.visual_grounding_first_try)})`, x.visual_grounding_first_try >= t.visual_grounding_first_try ? "pass" : "fail") +
-        row("PII recall", pct(x.pii_recall) + ` (target ${pct(t.pii_recall)})`, x.pii_recall >= t.pii_recall ? "pass" : "fail") +
-        row("PII precision", pct(x.pii_precision) + ` (target ${pct(t.pii_precision)})`, x.pii_precision >= t.pii_precision ? "pass" : "fail") +
-        row("Redaction — recoverable tokens", x.redaction_recoverable_tokens + " (target 0)", x.redaction_recoverable_tokens === 0 ? "pass" : "fail") +
-        row("Extension models", x.resource_mb + " MB (budget " + t.resource_mb + " MB)", x.resource_mb <= t.resource_mb ? "pass" : "fail") +
-        row("Latency p50 / step (mock planner)", x.latency_p50_s + "s (target ≤" + t.latency_p50_s + "s)", x.latency_p50_s <= t.latency_p50_s ? "pass" : "fail") +
+        (m.honesty ? `<p class="caveat">${esc(m.honesty)}</p>` : "") +
+        `<div class="tiles">` +
+        tile("Visual grounding, first try (mock planner)", pct(x.visual_grounding_first_try), `target ${pct(t.visual_grounding_first_try)}`, x.visual_grounding_first_try >= t.visual_grounding_first_try) +
+        tile("PII recall", pct(x.pii_recall), `target ${pct(t.pii_recall)}`, x.pii_recall >= t.pii_recall) +
+        tile("PII precision", pct(x.pii_precision), `target ${pct(t.pii_precision)}`, x.pii_precision >= t.pii_precision) +
+        tile("Redaction — recoverable tokens", x.redaction_recoverable_tokens, "target 0", x.redaction_recoverable_tokens === 0) +
+        tile("Extension models", x.resource_mb + " MB", "budget " + t.resource_mb + " MB", x.resource_mb <= t.resource_mb) +
+        tile("Latency p50 / step (mock planner)", x.latency_p50_s + "s", "target ≤" + t.latency_p50_s + "s", x.latency_p50_s <= t.latency_p50_s) +
+        `</div>` +
         `<p class="note">Run: ${esc(m.generated_at)} · ${esc(m.fixtures)} fixtures · worst page: ${esc(m.worst_page || "—")} (${esc(m.worst_page_s ?? "—")}s) · worst PII fixture: ${esc(m.worst_pii_fixture || "—")} (recall ${esc(m.worst_pii_recall ?? "—")})</p>`;
     }
     const e = await get("/proof/egress");
@@ -222,9 +465,10 @@ async function loadSent() {
       return;
     }
     $("sent-body").innerHTML = d.entries.map(en => `
-      <div class="row"><span>${esc(new Date(en.at * 1000).toLocaleString())} · ${esc(en.endpoint)} · ${esc(en.model)} · ~${esc(en.tokens_est)} tokens · ${esc(en.ms)} ms · ${en.ok ? "ok" : "failed"}</span>
+      <div class="sent-entry">
+      <div class="row"><span class="sent-meta">${esc(new Date(en.at * 1000).toLocaleString())} · ${esc(en.endpoint)} · ${esc(en.model)} · ~${esc(en.tokens_est)} tokens · ${esc(en.ms)} ms · ${en.ok ? "ok" : "failed"}</span>
       <button class="ghost" data-copy="${esc(en.id)}">Copy redacted</button></div>
-      <pre id="prompt-${esc(en.id)}">${esc(en.prompt_redacted)}</pre>`).join("");
+      <pre id="prompt-${esc(en.id)}">${esc(en.prompt_redacted)}</pre></div>`).join("");
     document.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
       const t = document.getElementById("prompt-" + b.dataset.copy).textContent;
       navigator.clipboard.writeText(t).then(
