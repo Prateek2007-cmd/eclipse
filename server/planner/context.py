@@ -75,6 +75,15 @@ def fit_to_budget(
     # ~50 chars; reserve 80).
     budget_chars -= 80
     lines = observation_text.splitlines()
+    # The URL line (first) is pinned: the planner must know which
+    # page it is on even when the element list is truncated — the
+    # old code dropped from the front, so the URL was the first
+    # thing lost.
+    pinned: list[str] = []
+    if lines and lines[0].startswith("URL: "):
+        pinned = [lines[0]]
+        lines = lines[1:]
+        budget_chars -= len(pinned[0]) + 1
     # Keep the last lines that fit the budget.
     kept: list[str] = []
     used = 0
@@ -86,4 +95,4 @@ def fit_to_budget(
     kept.reverse()
     if len(kept) < len(lines):
         kept.insert(0, f"... [{len(lines) - len(kept)} earlier elements omitted for the 8K budget]")
-    return fixed + "\n\n" + "\n".join(kept)
+    return fixed + "\n\n" + "\n".join(pinned + kept)

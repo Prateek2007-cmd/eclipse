@@ -317,7 +317,14 @@ def call_planner(
             text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             text = text.strip()
             if not text:
+                # An empty response is still a real outbound call:
+                # record it like the exception branch does, or the
+                # proof log and the egress audit show 0 checked
+                # calls for a model that answered (gpt-oss-120b
+                # returns empty content live).
+                ms = (time.time() - started) * 1000
                 errors.append(f"{ep.name}: empty response")
+                _record_outbound(url, ep.model, prompt, ms, ok=False)
                 continue
             ms = (time.time() - started) * 1000
             if ep.quota_model:
