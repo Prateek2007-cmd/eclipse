@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS briefings(
 CREATE TABLE IF NOT EXISTS grants(
   id TEXT PRIMARY KEY, origin TEXT, scope TEXT, expires_at INTEGER,
   created_at INTEGER, detail TEXT);
+CREATE TABLE IF NOT EXISTS pending_approvals(
+  id TEXT PRIMARY KEY, task_id TEXT, step INTEGER, action TEXT,
+  detail TEXT, created_at INTEGER, expires_at INTEGER);
 CREATE TABLE IF NOT EXISTS quota(
   model TEXT PRIMARY KEY, used_today INTEGER, limit_day INTEGER,
   reset_at INTEGER);
@@ -194,6 +197,22 @@ def migrate(db_path: Path | None = None) -> None:
             grant_cols = {r[1] for r in conn.execute("PRAGMA table_info(grants)")}
             if "detail" not in grant_cols:
                 conn.execute("ALTER TABLE grants ADD COLUMN detail TEXT")
+            # Bug 3 fix: pending approvals — the human gate is a
+            # real store now, not UI flow. The loop records a
+            # pending approval when a step reaches the gate, and
+            # approve requires a live record for that task (a
+            # made-up approval_id used to mint a real grant).
+            # The SCHEMA string declares the table for fresh
+            # databases; existing ones get it here.
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "pending_approvals" not in tables:
+                conn.execute(
+                    "CREATE TABLE pending_approvals("
+                    " id TEXT PRIMARY KEY, task_id TEXT, step INTEGER,"
+                    " action TEXT, detail TEXT, created_at INTEGER,"
+                    " expires_at INTEGER)"
+                )
             # Sprint 6: the rag_chunks table was reshaped (id, text,
             # kind, meta) — the Sprint 1 shape (doc_id, chunk, vec)
             # never held data (RAG was not built), so recreate it
