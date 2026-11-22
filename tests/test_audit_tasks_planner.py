@@ -688,21 +688,32 @@ class TestApproval(AuditBase):
         # One approval, one grant: POSTing the same approval_id
         # twice (a double-click, a network retry) minted two
         # grants — two submits from one approval.
+        # Bug 3 fix: approve needs a LIVE pending approval — the
+        # old test approved a bare id, which is exactly the hole
+        # the fix closes, so the pending record is seeded first.
         task_id = loop.create_task(self.conn, "Apply to a role")
-        body = tasks_api.ApproveIn(approval_id="appr_replay_1")
+        approval_id = loop.record_pending_approval(
+            self.conn, task_id, step=1, action="submit")
+        body = tasks_api.ApproveIn(approval_id=approval_id)
         tasks_api.approve_step(task_id, body)
         with self.assertRaises(HTTPException) as ctx:
             tasks_api.approve_step(
-                task_id, tasks_api.ApproveIn(approval_id="appr_replay_1"))
+                task_id, tasks_api.ApproveIn(approval_id=approval_id))
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertEqual(self._grants_left(task_id), 1)
 
     def test_two_distinct_approvals_mint_two_grants(self):
         # Guard: the replay check keys on the approval_id — two
         # separate approvals (two cards) still mint two grants.
+        # (Bug 3 fix: two live pending approvals are seeded first;
+        # approving bare ids no longer mints anything.)
         task_id = loop.create_task(self.conn, "Apply to a role")
-        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id="appr_a"))
-        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id="appr_b"))
+        first = loop.record_pending_approval(
+            self.conn, task_id, step=1, action="submit")
+        second = loop.record_pending_approval(
+            self.conn, task_id, step=2, action="submit")
+        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id=first))
+        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id=second))
         self.assertEqual(self._grants_left(task_id), 2)
 
     def test_approval_with_id_in_detail_is_consumable(self):
@@ -713,7 +724,12 @@ class TestApproval(AuditBase):
         task_id = loop.create_task(
             self.conn, "Apply to role_1 (Acme Tech)", ROLE_CONSTRAINTS)
         loop.plan_task(self.conn, task_id, call_fn=_mock_plan(1))
-        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id="appr_1"))
+        # Bug 3 fix: approve needs a LIVE pending approval — the
+        # old test approved a bare id, which is exactly the hole
+        # the fix closes, so the pending record is seeded first.
+        approval_id = loop.record_pending_approval(
+            self.conn, task_id, step=1, action="submit")
+        tasks_api.approve_step(task_id, tasks_api.ApproveIn(approval_id=approval_id))
         result = loop.execute_step(self.conn, task_id, 1, FORM_OBS,
                                    call_fn=_mock_click("el_app_submit"))
         self.assertEqual(result["action"]["element_id"], "el_app_submit")
@@ -735,9 +751,13 @@ class TestApproval(AuditBase):
     def test_approve_returns_real_status(self):
         # approve_step always answered "planned", even when the
         # task was not ask_user and stayed where it was.
+        # (Bug 3 fix: a live pending approval is seeded first;
+        # approving a bare id no longer mints anything.)
         task_id = loop.create_task(self.conn, "Do a thing")
+        approval_id = loop.record_pending_approval(
+            self.conn, task_id, step=1, action="submit")
         result = tasks_api.approve_step(
-            task_id, tasks_api.ApproveIn(approval_id="appr_1"))
+            task_id, tasks_api.ApproveIn(approval_id=approval_id))
         self.assertEqual(result["status"], "created")
 
 

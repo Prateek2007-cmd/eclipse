@@ -484,10 +484,21 @@ class TestTasksApi(unittest.TestCase):
         status, body = _request(self.base, "POST", f"/tasks/{task_id}/approve",
                                 body={})
         self.assertEqual(status, 422, body)
+        # Bug 3 fix: approve needs a LIVE pending approval — the
+        # old test approved a bare id, which is exactly the hole
+        # the fix closes. Seed one in the server's DB first (the
+        # same direct-DB pattern test_get_task_flattens_step_
+        # description uses).
+        conn = db.connect(Path(self.tmp.name) / "eclipse.db")
+        try:
+            approval_id = loop.record_pending_approval(
+                conn, task_id, step=1, action="submit")
+        finally:
+            conn.close()
         status, body = _request(self.base, "POST", f"/tasks/{task_id}/approve",
-                                body={"approval_id": "appr_123"})
+                                body={"approval_id": approval_id})
         self.assertEqual(status, 200, body)
-        self.assertEqual(body["approval_id"], "appr_123")
+        self.assertEqual(body["approval_id"], approval_id)
 
     def test_verify_needs_the_baseline_observation(self):
         # Review B2/N6: verify is a baseline diff, so the API

@@ -173,6 +173,18 @@ def fill(body: FillIn, _token: str = Depends(require_token)):
     grant = grant_store.GRANTS.get(body.task_id)
     if grant is None:
         return {"ok": False, "reason": "no valid grant for this task"}
+    # Origin scoping is fail-closed, the same rule the
+    # value-release path (fill.py) enforces: a grant scoped to an
+    # origin answers ONLY there (Bug 5: the probe used to confirm
+    # a card on any origin). An empty/unparseable origin cannot
+    # prove it is the grant's origin, so it is denied too. The
+    # check runs before touch(), so a denied probe does not
+    # refresh the grant's idle clock.
+    origin = _normalise_origin(body.origin)
+    if grant.origin and grant.origin != origin:
+        return {"ok": False,
+                "reason": f"the card grant is for {grant.origin}, "
+                          f"not {origin or 'an unknown origin'}"}
     grant.touch()
     field = body.field.lower()
     if field in ("card_number", "card", "cvv"):

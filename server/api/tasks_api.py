@@ -8,6 +8,7 @@ POST /tasks/{id}/steps/{n}/execute       {observation} -> one validated action
 POST /tasks/{id}/steps/{n}/verify        {observation, expected_end_state, previous_url?}
                                          -> {verified, reason, retry}
 POST /tasks/{id}/approve                 {approval_id} -> approve a pending step
+GET  /tasks/{id}/approvals               -> live pending approvals for the task
 POST /tasks/{id}/cancel | /pause | /resume
 """
 from __future__ import annotations
@@ -217,20 +218,58 @@ class ApproveIn(BaseModel):
     role_id: str | None = Field(default=None, max_length=200)
 
 
+@router.get("/tasks/{task_id}/approvals")
+def list_pending_approvals(task_id: str, _token: str = Depends(require_token)):
+    """Live pending approvals for a task (the human gate, §5.4):
+    the ids the client must POST to /tasks/{id}/approve. Expired
+    approvals are not listed (approving one is a 409)."""
+    _task_or_404(task_id)
+    conn = _conn()
+    try:
+        import time
+
+        now = int(time.time())
+        rows = conn.execute(
+            "SELECT id, task_id, step, action, detail, created_at, expires_at"
+            " FROM pending_approvals WHERE task_id = ? AND expires_at > ?"
+            " ORDER BY created_at ASC",
+            (task_id, now),
+        ).fetchall()
+    finally:
+        conn.close()
+    approvals = []
+    for row in rows:
+        try:
+            detail = json.loads(row["detail"] or "{}")
+        except (ValueError, TypeError):
+            detail = {}
+        approvals.append({
+            "approval_id": row["id"], "task_id": row["task_id"],
+            "step": row["step"], "action": row["action"],
+            **{k: v for k, v in detail.items() if v is not None},
+            "created_at": row["created_at"], "expires_at": row["expires_at"],
+        })
+    return {"task_id": task_id, "approvals": approvals}
+
+
 @router.post("/tasks/{task_id}/approve")
 def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_token)):
     """Approve a pending step (the approval card flow, §5.4/§6.1).
 
-    Records the approval: an audit entry and a grants row (scope
-    "approve", 10-minute expiry), then unblocks the task. The
-    failed step that triggered ask_user stays failed — the approval
-    lets the task continue from the checkpoint, it does not re-run
-    the failed step.
+    The approval_id must name a LIVE pending approval recorded by
+    the task loop when the step reached the human gate (Bug 3:
+    the old handler accepted any made-up id, on any task state,
+    because no pending-approval store existed at all). An unknown
+    id is a 404; a pending approval on a finished task or past
+    its expiry is a 409. On success the pending approval is
+    consumed and a 10-minute grant is minted — the same grant
+    semantics as before (one approval = one action). The grant's
+    scope comes from the pending record, not the request body:
+    the client cannot widen what the gate asked for.
     """
     _task_or_404(task_id)
     conn = _conn()
     try:
-        import json
         import time
         import uuid
 
@@ -242,8 +281,9 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
         # POST (a double-click, a network retry) is one approval,
         # not two submits. The approval_id rides in the grant
         # detail (it is metadata, not scope — see
-        # loop._consume_approval). Checked before the audit entry,
-        # so a rejected replay leaves no approval in the trail.
+        # loop._consume_approval). Checked before the pending
+        # lookup, so a replay of a CONSUMED approval still 409s
+        # (its pending record is gone) instead of 404ing.
         for row in conn.execute(
             "SELECT detail FROM grants WHERE origin = ? AND scope = 'approve'",
             (task_id,),
@@ -257,16 +297,49 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
                     status_code=409,
                     detail=f"approval {body.approval_id} already recorded for this task",
                 )
+        # The pending approval is the gate: unknown (or recorded
+        # for a different task) is a 404 — no pending record, no
+        # grant, whatever the task state.
+        pending = loop.get_pending_approval(conn, body.approval_id)
+        if pending is None or pending["task_id"] != task_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no pending approval {body.approval_id} for this task",
+            )
+        # A finished task cannot be approved back to life.
+        task = loop.get_task(conn, task_id)
+        if task is not None and task["status"] in TERMINAL_TASK_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=f"task {task_id} is {task['status']}; refusing to approve",
+            )
+        # An expired approval is a 409, and the stale record is
+        # dropped so it cannot be approved later.
+        if int(pending["expires_at"] or 0) <= now:
+            loop.consume_pending_approval(conn, body.approval_id)
+            raise HTTPException(
+                status_code=409,
+                detail=f"approval {body.approval_id} has expired",
+            )
+        # Consume the pending approval FIRST, so a concurrent
+        # second POST finds nothing to consume (the grant replay
+        # check above is the second layer, not the only one).
+        loop.consume_pending_approval(conn, body.approval_id)
         audit.append(
             conn, task_id, "task.approve",
             {"approval_id": body.approval_id},
         )
+        try:
+            scope = json.loads(pending["detail"] or "{}")
+        except (ValueError, TypeError):
+            scope = {}
         detail = {
             "approval_id": body.approval_id,
+            "step": pending["step"],
             **{
                 k: v for k, v in {
-                    "step": body.step, "element_id": body.element_id,
-                    "role_id": body.role_id,
+                    "element_id": scope.get("element_id"),
+                    "role_id": scope.get("role_id"),
                 }.items() if v is not None
             },
         }
@@ -310,8 +383,22 @@ def revoke_grants(task_id: str, _token: str = Depends(require_token)):
     return {"task_id": task_id, "revoked": revoked}
 
 
+# Terminal states are final: nothing (pause, cancel, approve,
+# resume) moves a task out of one. resume_task already enforced
+# this; pause/cancel did not (Bug 4).
+TERMINAL_TASK_STATUSES = ("cancelled", "failed", "done")
+
+
 def _set_status(task_id: str, status: str) -> dict:
-    _task_or_404(task_id)
+    task = _task_or_404(task_id)
+    # Terminal states are final: pausing or cancelling a finished
+    # task must not resurrect it (Bug 4: pause on a cancelled task
+    # flipped it to "paused", and resume then worked).
+    if task["status"] in TERMINAL_TASK_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"task {task_id} is {task['status']}; refusing to set {status}",
+        )
     conn = _conn()
     try:
         conn.execute(

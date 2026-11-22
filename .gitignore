@@ -20,6 +20,7 @@ extension/dist/
 extension/tests-dist/
 # Workspace: dependencies (install with `npm install` in web/workspace)
 web/workspace/node_modules/
+web/workspace/tests-dist/
 # Binary files — the snapshot push is UTF-8 text only, so these
 # stay local: fixture PNGs (regenerate after cloning with
 # evals/sih-benchmark/fixtures/generate_images.py), the screenshot

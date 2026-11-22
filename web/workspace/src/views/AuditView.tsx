@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { api, type AuditEntry, type AuditVerifyResult, type SystemMetrics } from "../api";
-import { fmtDateTime, usePoll, useTaskList } from "../hooks";
+import { fmtAuditDateTime, usePoll, useTaskList } from "../hooks";
 import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
 
 /** Audit & Trace view: the hash-chained audit log, its
  * verification, the JSON export, and server metrics.
  *
  * The hash chain proves tampering after the fact. It does not
- * prevent it. (Also fixed here: the old pane rendered
- * created_at — Unix seconds — as milliseconds, showing every
- * entry at 1970.) */
+ * prevent it. Audit created_at is Unix MILLISECONDS (the only
+ * ms timestamps the server returns — everything else is
+ * seconds), so entries render through fmtAuditDateTime, not
+ * fmtDateTime: the seconds formatter multiplied them a second
+ * time and showed every entry in year 58863. The export
+ * filename below uses exported_at raw for the same reason. */
 export function AuditView({ token }: { token: string | null }) {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
@@ -180,7 +183,7 @@ export function AuditView({ token }: { token: string | null }) {
                 {[...audit].reverse().slice(0, 100).map((e) => (
                   <tr key={e.id}>
                     <td className="mono">{e.id}</td>
-                    <td className="mono">{fmtDateTime(e.created_at)}</td>
+                    <td className="mono">{fmtAuditDateTime(e.created_at)}</td>
                     <td>{e.action}</td>
                     <td className="mono">{e.task_id ?? "—"}</td>
                     <td className="mono" title={e.hash}>
