@@ -49,8 +49,30 @@ let sessions: {
  *  value on every step of one task. A fresh registry per observe
  *  message would re-number the same value mid-task. The task id
  *  comes from the caller (Sprint 3's planner); until then every
- *  observe shares the "default" task. */
+ *  observe shares the "default" task.
+ *
+ *  Registries hold raw PII values, so only the most recent few
+ *  tasks are kept: when the cap is exceeded the oldest task's
+ *  registry is dropped. A dropped task that is observed again
+ *  re-numbers its placeholders from 1 — tasks normally run one at
+ *  a time, so the cap is only reached by interleaved tasks. */
+const MAX_REGISTRIES = 10;
 const registries = new Map<string, PlaceholderRegistry>();
+
+function registryFor(taskId: string): PlaceholderRegistry {
+  let registry = registries.get(taskId);
+  if (!registry) {
+    registry = new PlaceholderRegistry();
+    registries.set(taskId, registry);
+    // Map iteration order is insertion order (oldest first).
+    while (registries.size > MAX_REGISTRIES) {
+      const oldest = registries.keys().next().value;
+      if (oldest === undefined) break;
+      registries.delete(oldest);
+    }
+  }
+  return registry;
+}
 
 /** Florence-2 calls used by the current step. A step starts with
  *  an "observe" message, so the counter resets there; a "ground"
@@ -138,7 +160,31 @@ interface GroundMessage {
 }
 
 chrome.runtime.onMessage.addListener((msg: ObserveMessage | GroundMessage, _sender, sendResponse) => {
+  // Only answer messages meant for this document. A catch-all
+  // error response would race the background's own answer to
+  // extension-wide messages (eclipse.observe / eclipse.execute):
+  // the error is immediate, the background's answer is async, so
+  // the sender would get the error and the real result would be
+  // dropped. Returning false leaves the message to its owner.
+  if (msg?.type !== "observe" && msg?.type !== "ground") return false;
   (async () => {
+    try {
+      await handleMessage(msg, sendResponse);
+    } catch (err) {
+      // A throw anywhere (a malformed message, a redactor failure)
+      // must still answer: without this the background's
+      // sendMessage await hangs forever and the step never ends.
+      // handleMessage only throws before it has responded.
+      sendResponse({ error: err instanceof Error ? err.message : String(err) });
+    }
+  })();
+  return true; // async response
+});
+
+async function handleMessage(
+  msg: ObserveMessage | GroundMessage,
+  sendResponse: (response: unknown) => void,
+): Promise<void> {
     if (msg.type === "ground") {
       // Florence-2 budget: at most FLORENCE_MAX_CALLS_PER_STEP per
       // step. The counter resets on each "observe" (a new step).
@@ -167,11 +213,7 @@ chrome.runtime.onMessage.addListener((msg: ObserveMessage | GroundMessage, _send
         sessions: s,
       });
       const taskId = msg.taskId ?? "default";
-      let registry = registries.get(taskId);
-      if (!registry) {
-        registry = new PlaceholderRegistry();
-        registries.set(taskId, registry);
-      }
+      const registry = registryFor(taskId);
       const redacted = redactObservation(obs, registry);
       // The second scan also checks that none of the raw values the
       // redactor recorded is still present in the payload.
@@ -191,9 +233,16 @@ chrome.runtime.onMessage.addListener((msg: ObserveMessage | GroundMessage, _send
         egressAllowed: egress.allowed,
         egressReason: egress.reason,
       });
-      const proofScreenshot = msg.screenshot
-        ? paintBlackout(msg.screenshot, redacted.blackoutBoxes)
-        : null;
+      // X3: a blocked step's proof image is null, not the raw
+      // screenshot — when the gate blocks because a detector
+      // failed, blackoutBoxes can be empty and the image would
+      // show unredacted PII to whoever asked for the
+      // observation. The boxes and hits above still say what was
+      // detected, so nothing about the block is lost.
+      const proofScreenshot =
+        gate.allow && msg.screenshot
+          ? paintBlackout(msg.screenshot, redacted.blackoutBoxes)
+          : null;
       sendResponse({
         redactedPayload: gate.allow ? redacted.redactedPayload : null,
         blackoutBoxes: redacted.blackoutBoxes,
@@ -204,7 +253,5 @@ chrome.runtime.onMessage.addListener((msg: ObserveMessage | GroundMessage, _send
       });
       return;
     }
-    sendResponse({ error: `unknown message type: ${(msg as { type: string }).type}` });
-  })();
-  return true; // async response
-});
+    // Unreachable: the listener only forwards "observe" and "ground".
+}

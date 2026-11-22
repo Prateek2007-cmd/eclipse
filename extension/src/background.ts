@@ -47,10 +47,19 @@ async function scheduleWatchAlarms(): Promise<void> {
       }
     }
     for (const watch of data.watches) {
-      // M17: only active watches get an alarm — muted/broken
-      // watches would wake the worker for nothing (/due filters
-      // them out anyway).
-      if (watch.status !== "active" || watch.interval_min < 15) continue;
+      // M17: active and muted watches get an alarm. A muted
+      // watch becomes due when its mute expires — with no alarm
+      // nothing would ever wake the worker to check it, so a
+      // muted watch stayed muted forever unless another watch's
+      // alarm fired first (/due filters it out until the mute
+      // expires, so the early wake-ups are harmless). Broken
+      // watches get none: /due never returns them until they
+      // are repaired.
+      if (
+        (watch.status !== "active" && watch.status !== "muted") ||
+        watch.interval_min < 15
+      )
+        continue;
       await chrome.alarms.create(watchAlarmName(watch.id), {
         periodInMinutes: watch.interval_min,
       });
@@ -243,6 +252,16 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ error: "no active tab" });
         return;
       }
+      // captureVisibleTab screenshots the ACTIVE tab: if the target
+      // tab is not active, the screenshot would show a different
+      // page than the walk — the vision results (YOLO boxes, OCR,
+      // faces, blackout boxes) would describe the wrong page.
+      // Activate the target first so the walk and the screenshot
+      // agree. A closed tab makes tabs.get reject → error response.
+      const tab = await chrome.tabs.get(tabId);
+      if (!tab.active) {
+        await chrome.tabs.update(tabId, { active: true });
+      }
       const walk = await chrome.tabs.sendMessage(tabId, { type: "walk" });
       const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
       // Decode the screenshot to raw pixels for the offscreen doc.
@@ -253,13 +272,20 @@ chrome.runtime.onMessage.addListener(
       ctx.drawImage(bitmap, 0, 0);
       const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
       await ensureOffscreen();
+      // An unknown taskKind would reach the gate as neither
+      // "image" nor "mixed", so vision would silently stop being
+      // required — default to "mixed" (the strictest) instead.
+      const taskKind =
+        msg.taskKind === "dom" || msg.taskKind === "image" || msg.taskKind === "mixed"
+          ? msg.taskKind
+          : "mixed";
       const result = await chrome.runtime.sendMessage({
         type: "observe",
         url: walk.url,
         viewport: walk.viewport,
         elements: walk.elements,
         screenshot: { data: pixels.data, width: bitmap.width, height: bitmap.height },
-        taskKind: msg.taskKind ?? "mixed",
+        taskKind,
         egressTarget: msg.egressTarget ?? "http://127.0.0.1:8000",
       });
       if (result?.blackoutBoxes?.length) {

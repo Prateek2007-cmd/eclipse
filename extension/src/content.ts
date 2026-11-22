@@ -10,7 +10,7 @@
  *     (guarded executor, Sprint 3). The action must resolve to a
  *     real element id from the current walk.
  */
-import { executeAction, type ExecutorAction, type ExecuteOptions } from "./executor.js";
+import { executeAction, safeUrl, type ExecutorAction, type ExecuteOptions } from "./executor.js";
 import { buildExecuteOptions } from "./execute-options.js";
 import { readSelectorValue } from "./monitor.js";
 import { walkDom, walkDomWithNodes } from "./vision/dom-walker.js";
@@ -61,8 +61,18 @@ chrome.runtime.onMessage.addListener(
     }
     if (msg.type === "eclipse.watchCheck") {
       // Sprint 8: read one selector's current value for a watch.
-      // No PII is recorded here — the value goes to the server,
-      // which compares it against the stored last value.
+      // The value goes to the server raw over the loopback
+      // channel; the server stores it as the watch's last value
+      // and compares it on the next check. Events, reasons and
+      // briefing cards carry only redacted previews (M11), but
+      // the stored value itself is the raw page text, by design
+      // — the same local-storage treatment as profiles and
+      // drafts. (Audit note X1: this is the one observed-data
+      // stream the privacy pipeline's second scan does not
+      // cover; if that rule should cover watches too, change
+      // detection needs a hash of the raw value, not a redacted
+      // comparison — redacting first breaks the M11 behaviour of
+      // firing when a PII-bearing value changes.)
       // M12: a missing or non-string selector gets a not-found
       // answer, not a thrown TypeError with no response.
       if (typeof msg.selector !== "string" || msg.selector.length === 0) {
@@ -94,7 +104,10 @@ chrome.runtime.onMessage.addListener(
           const result = await executeAction(msg.action!, document, nodes, options);
           sendResponse(result);
         } catch (err) {
-          sendResponse({ ok: false, detail: err instanceof Error ? err.message : String(err), url: location.href });
+          // Strip the query string and fragment, like every
+          // executor result: the page URL can carry a reset token
+          // or an email, and this error response goes to the server.
+          sendResponse({ ok: false, detail: err instanceof Error ? err.message : String(err), url: safeUrl(location.href) });
         }
       })();
       return true; // async response
