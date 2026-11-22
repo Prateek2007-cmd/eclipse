@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type TaskDetail, type TaskSummary } from "../api";
-import { fmtDateTime, newApprovalId } from "../hooks";
+import { api, type PendingApproval, type TaskDetail, type TaskSummary } from "../api";
+import { fmtDateTime } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyState, ErrorBanner, SectionHeader, StatusChip, statusTone } from "../components/ui";
 
@@ -107,9 +107,12 @@ function useTaskDetail(taskId: string | null, token: string | null) {
 
 /** ApprovalCard (plan §5.4, review M4): what will happen, in
  * plain words, before any consequential step runs. Approve
- * writes the grant; Deny cancels the task. The approval id is
- * generated here — the server accepts any id the client
- * supplies and records it in the grant. */
+ * writes the grant; Deny cancels the task. The approval id
+ * comes from the server — the task loop records a pending
+ * approval when the step reaches the human gate, and the
+ * server only accepts that id (Bug 3 fix: a client-made id
+ * is a 404). The card loads the live pending approvals and
+ * approves the oldest one. */
 function ApprovalCard({
   taskId,
   status,
@@ -124,12 +127,30 @@ function ApprovalCard({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDeny, setConfirmDeny] = useState(false);
+  const [approvals, setApprovals] = useState<PendingApproval[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void api.listPendingApprovals(taskId).then(
+      (res) => {
+        if (alive) setApprovals(res.approvals);
+      },
+      (err) => {
+        if (alive) setError(err instanceof Error ? err.message : String(err));
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
 
   const approve = async () => {
+    const first = approvals?.[0];
+    if (!first) return;
     setPending(true);
     setError(null);
     try {
-      await api.approveTask(taskId, newApprovalId());
+      await api.approveTask(taskId, first.approval_id);
       onApproved();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -161,13 +182,33 @@ function ApprovalCard({
         Approving lets the task continue from its checkpoint. Nothing is
         sent, charged, or submitted until you approve.
       </p>
+      {approvals && approvals.length > 0 && (
+        <p>
+          Waiting on{" "}
+          <strong>
+            step {approvals[0].step ?? "—"} — {approvals[0].action}
+          </strong>
+          {approvals[0].role_id ? ` for role ${approvals[0].role_id}` : ""}.
+        </p>
+      )}
+      {approvals !== null && approvals.length === 0 && (
+        <p role="status" className="muted">
+          No pending approval for this task — it may have expired or
+          already been handled. Denying still cancels the task.
+        </p>
+      )}
       {error && (
         <p role="alert" className="danger">
           {error}
         </p>
       )}
       <div className="task-actions">
-        <button type="button" className="primary" onClick={() => void approve()} disabled={pending}>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void approve()}
+          disabled={pending || approvals === null || approvals.length === 0}
+        >
           {pending ? "Approving…" : "Approve"}
         </button>
         <button type="button" onClick={() => setConfirmDeny(true)} disabled={pending}>
