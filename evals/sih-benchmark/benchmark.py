@@ -53,6 +53,8 @@ sys.path.insert(0, str(ROOT))
 from server.core import config, db  # noqa: E402
 from server.planner import router as planner_router  # noqa: E402
 from server.planner import scan  # noqa: E402
+from server.proof import clear as _clear_outbound_log  # noqa: E402
+from server.proof import entries as _outbound_entries  # noqa: E402
 from server.tasks import loop  # noqa: E402
 
 RESULTS_DIR = BASE / "results"
@@ -363,6 +365,11 @@ def _loop_metrics(gt: dict, live: bool = False) -> dict:
 
 def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
     db.migrate()
+    if live:
+        # The outbound log is process-local: clear it so the calls
+        # captured below are exactly this run's, not leftovers from
+        # an earlier live run in the same process.
+        _clear_outbound_log()
 
     step_times: list[float] = []
     per_fixture: dict[str, dict] = {}
@@ -409,6 +416,11 @@ def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
             plan = loop.plan_task(conn, task_id, call_fn=plan_fn)
         except Exception as exc:  # noqa: BLE001 - benchmark reports it
             per_fixture[name] = {"error": f"plan failed: {exc}"}
+            # A fixture that never planned still counts: its steps
+            # were attempted (by the run) and grounded none of
+            # them. Excluding them let the headline grounding read
+            # 100% with a whole fixture failed.
+            total += len(actions)
             conn.close()
             continue
         steps_ok = 0
@@ -489,11 +501,33 @@ def _loop_metrics_inner(gt: dict, live: bool = False) -> dict:
             worst_fixture = name
     p50 = statistics.median(step_times) if step_times else 0.0
     executable = max(1, total - handoffs)
+    # Fixtures with a real error (a plan failure, or a step error
+    # that is not a correct human-only handoff). main() exits
+    # non-zero when this is > 0 — a fixture error must fail loudly,
+    # not hide in per_fixture detail behind a green headline.
+    fixture_errors = sum(
+        1
+        for fx in per_fixture.values()
+        if fx.get("error")
+        or any(
+            not msg.startswith("handoff (correct)")
+            for msg in fx.get("errors", {}).values()
+        )
+    )
+    # A live run's planner calls are recorded in this process's
+    # outbound log (server/proof) — capture them into the results
+    # before the process exits, or they vanish and the egress audit
+    # (which only sees the server process's log) reports 0 calls
+    # checked for a run that really made ~25. Mock runs make no
+    # real outbound calls, so the list is empty by design.
+    outbound_calls = _outbound_entries(limit=200) if live else []
     return {
         "grounding_first_try": round(grounded / executable, 3),
         "grounded_steps": grounded,
         "total_steps": total,
         "human_only_handoffs": handoffs,
+        "fixture_errors": fixture_errors,
+        "outbound_calls": outbound_calls,
         "step_time_s": {
             "p50": round(p50, 3),
             "max": round(max(step_times), 3) if step_times else 0.0,
@@ -587,6 +621,15 @@ def main() -> int:
     print(f"  redaction recoverable tokens: {redaction['recoverable_tokens']}")
     print(f"  extension models: {resources['extension_models_mb']} MB (budget 300)")
     print(f"  latency p50: {loop_metrics['step_time_s']['p50']}s (target ≤6s)")
+    if args.live:
+        print(f"  outbound planner calls recorded: {len(loop_metrics['outbound_calls'])}")
+    if loop_metrics["fixture_errors"]:
+        print(
+            f"  ERROR: {loop_metrics['fixture_errors']} fixture(s) errored "
+            "(see detail.loop.per_fixture) — exiting 1",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

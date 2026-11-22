@@ -200,9 +200,19 @@ def _check_fixture(name: str, spec: dict, port: int) -> dict:
 
 
 def run(runs: int, out_dir: Path) -> tuple[dict, bool]:
-    """Run the harness. Returns (results, all_passed)."""
+    """Run the harness. Returns (results, all_passed).
+
+    Fails loudly on an empty fixture set: 0/0 passed used to
+    report all_passed=True (exit 0) — a silent pass on nothing.
+    """
+    if runs < 1:
+        raise ValueError(f"--runs must be >= 1, got {runs}")
     with open(GROUND_TRUTH, encoding="utf-8") as f:
         ground_truth = json.load(f)
+    if not ground_truth.get("fixtures"):
+        raise ValueError(
+            f"no fixtures in {GROUND_TRUTH} — refusing to pass an empty run"
+        )
 
     server, port = _serve_fixtures()
     results: dict = {
@@ -272,7 +282,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="results directory")
     args = parser.parse_args(argv)
 
-    results, all_passed = run(args.runs, args.out)
+    try:
+        results, all_passed = run(args.runs, args.out)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     rate = results["fixture_pass_rate"]
     print(f"fixtures: {rate['passed']}/{rate['total']} passed "
           f"({args.runs} run(s))")
