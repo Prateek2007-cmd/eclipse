@@ -84,6 +84,19 @@ export function fmtDateTime(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
+/** Unix MILLISECONDS → short local date + time, or "—" for
+ * null. Audit entries ONLY: the server writes audit
+ * created_at in ms (server/core/audit.py) while every other
+ * timestamp it returns is seconds. Passing an audit
+ * timestamp to fmtDateTime multiplies it a second time and
+ * lands in year 58863 — the old pane's plain
+ * new Date(created_at) was correct, and this is that, with
+ * the null guard. */
+export function fmtAuditDateTime(ts: number | null | undefined): string {
+  if (ts === null || ts === undefined) return "—";
+  return new Date(ts).toLocaleString();
+}
+
 /** A value the server returns with an uncertain shape (a
  * calendar event's nested start/end) rendered safely. */
 export function displayValue(value: unknown): string {

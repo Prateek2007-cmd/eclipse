@@ -67,6 +67,21 @@ export type TaskDetail = {
   receipts: Receipt[];
 };
 
+/** A pending human-gate approval, as the server records it
+ * (server/core/db.py pending_approvals). The server issues the
+ * id when the step reaches the gate — the client must approve
+ * one of these, never a made-up id (Bug 3 fix). */
+export type PendingApproval = {
+  approval_id: string;
+  task_id: string;
+  step: number | null;
+  action: string;
+  element_id?: string;
+  role_id?: string;
+  created_at: number;
+  expires_at: number;
+};
+
 /** One planned step, as the planner returns it
  * (planner/validate.py parse_plan). */
 export type PlanStep = {
@@ -206,6 +221,9 @@ export type AuditEntry = {
   payload_hash: string;
   prev_hash: string;
   hash: string;
+  /** Unix MILLISECONDS — the only ms timestamp the server
+   * returns (server/core/audit.py). Render with
+   * fmtAuditDateTime, never fmtDateTime. */
   created_at: number;
 };
 
@@ -645,6 +663,12 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ approval_id: approvalId, ...scope }),
       },
+    ),
+  /** Live pending approvals for a task — the ids the server
+   * will accept at approveTask. Expired ones are not listed. */
+  listPendingApprovals: (id: string) =>
+    call<{ task_id: string; approvals: PendingApproval[] }>(
+      `/tasks/${id}/approvals`,
     ),
   revokeGrants: (id: string) =>
     call<{ task_id: string; revoked: number }>(`/tasks/${id}/grants`, {
