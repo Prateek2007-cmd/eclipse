@@ -11,8 +11,43 @@ drive.readonly, drive.file (files Eclipse creates).
 from __future__ import annotations
 
 import json
+import re
 
 from .base import ConnectorError, GwsCli
+
+# "resume"/"cv" as a whole word in the filename stem.
+_WORD_RE = re.compile(r"(?:^|[^a-z0-9])(resume|cv)(?:$|[^a-z0-9])")
+
+
+def _resume_rank(name: str) -> int:
+    """How resume-like a filename is. Drive's `name contains
+    'resume'` also matches 'Presumed Innocence' and
+    'resume-template', and newest-first alone would pick those
+    over resume.pdf — so the name ranks first, the date only
+    breaks ties within a rank: 0 = the stem is exactly
+    `resume`/`cv`, 1 = the word appears (or the stem starts or
+    ends with it, e.g. `JohnSmithResume.pdf`), 2 = a substring
+    match only."""
+    stem = (name or "").rsplit(".", 1)[0].lower()
+    if stem in ("resume", "cv"):
+        return 0
+    if (
+        _WORD_RE.search(stem)
+        or stem.startswith(("resume", "cv"))
+        or stem.endswith(("resume", "cv"))
+    ):
+        return 1
+    return 2
+
+
+def _best_match(files: list[dict]) -> dict | None:
+    """The best-ranked file, newest within a rank (stable sort:
+    newest first, then by rank)."""
+    if not files:
+        return None
+    files.sort(key=lambda f: f.get("modifiedTime") or "", reverse=True)
+    files.sort(key=lambda f: _resume_rank(f.get("name") or ""))
+    return files[0]
 
 
 def _require_dict(data, what: str) -> dict:
@@ -68,18 +103,24 @@ class DriveConnector:
         ]
 
     def find_resume(self) -> dict | None:
-        """The user's resume file in Drive (newest match)."""
+        """The user's resume file in Drive: the best name match,
+        newest within a rank. A substring-only match ('Presumed
+        Innocence') loses to a real CV file; it is returned only
+        when nothing better exists."""
         files = self.list_files(
             "name contains 'resume' and trashed=false", page_size=10
         )
-        if not files:
-            files = self.list_files(
+        best = _best_match(files)
+        if best is not None and _resume_rank(best.get("name") or "") < 2:
+            return best
+        cv_best = _best_match(
+            self.list_files(
                 "name contains 'CV' and trashed=false", page_size=10
             )
-        if not files:
-            return None
-        files.sort(key=lambda f: f.get("modifiedTime") or "", reverse=True)
-        return files[0]
+        )
+        if cv_best is not None:
+            return cv_best
+        return best
 
     def upload_file(self, local_path: str, name: str | None = None) -> dict:
         """Upload a local file to Drive (the user asked for it).
