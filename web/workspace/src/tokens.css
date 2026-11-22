@@ -23,6 +23,12 @@
   --radius-card: 8px;
   --radius-panel: 12px;
   --radius-pill: 999px;
+  /* Workspace redesign: the modal backdrop and the sidebar
+   * widths are tokens too — no hardcoded colours or layout
+   * constants in the views. */
+  --backdrop: rgba(0, 0, 0, 0.6);
+  --sidebar-width: 220px;
+  --sidebar-collapsed-width: 64px;
   /* Sprint 9 fix (review M19): the webfont names (Inter, Sora,
    * IBM Plex Mono) were declared but never loaded — headings
    * rendered system fallbacks anyway. The workspace is
