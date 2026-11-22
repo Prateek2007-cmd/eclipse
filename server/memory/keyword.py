@@ -49,6 +49,16 @@ def store_fact(
     return fact_id
 
 
+def delete_fact(conn: sqlite3.Connection, fact_id: str) -> bool:
+    """Forget one fact. Returns False when no such fact exists.
+    A fact and a RAG chunk are separate rows — this removes the
+    fact only; a chunk with the same id (if one was indexed)
+    is forgotten via DELETE /rag/{chunk_id}."""
+    cur = conn.execute("DELETE FROM facts WHERE id = ?", (fact_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def recall(
     conn: sqlite3.Connection, query: str, limit: int = 5
 ) -> list[dict]:
