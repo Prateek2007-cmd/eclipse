@@ -104,14 +104,16 @@ def match_role(role: dict, profile: dict, today: _dt.date | None = None) -> dict
         )
 
     # Stipend floor. None = not listed (no constraint, flagged);
-    # 0 = explicitly unpaid (never fits).
+    # 0 = explicitly unpaid (never fits). A negative stipend is
+    # nonsense data from a bad parse — it never fits either.
     stipend = role.get("stipend")
     floor = profile.get("stipend_min")
     if stipend is None:
         warnings.append("stipend not listed")
-    elif stipend == 0:
+    elif stipend <= 0:
         return _no_fit(
-            role_id, ["unpaid role"],
+            role_id,
+            ["unpaid role"] if stipend == 0 else ["stipend is not a valid amount"],
             deadline, stipend, role.get("location"), warnings,
         )
     elif floor is not None and stipend < floor:
@@ -125,17 +127,28 @@ def match_role(role: dict, profile: dict, today: _dt.date | None = None) -> dict
 
     # Location. Live sites return "Hyderabad, Telangana, India",
     # so the match is substring-based against the allowed list.
+    # An empty location is NOT a match for anything: "" is a
+    # substring of every string, so without this guard a role
+    # with no location listed would fit any profile (and an
+    # empty entry in the profile's locations would disable the
+    # filter the same way). Missing data is surfaced, never
+    # silently dropped — like an unlisted stipend, a role with
+    # no location fits with a warning, but earns no location
+    # points and no location reason.
     loc = (role.get("location") or "").strip()
-    allowed = [str(l).lower() for l in (profile.get("locations") or [])]
+    allowed = [str(l).lower() for l in (profile.get("locations") or []) if str(l).strip()]
     loc_lower = loc.lower()
-    if allowed and not any(a in loc_lower or loc_lower in a for a in allowed):
+    if not loc:
+        warnings.append("location not listed")
+    elif allowed and not any(a in loc_lower or loc_lower in a for a in allowed):
         return _no_fit(
             role_id,
             [f"location {loc}, not in {', '.join(profile.get('locations') or [])}"],
             deadline, stipend, loc, warnings,
         )
-    reasons.append(f"location {loc}")
-    score += 15
+    if loc:
+        reasons.append(f"location {loc}")
+        score += 15
 
     # Degree. A role requiring M.Tech does not fit a B.Tech profile.
     role_degree = (role.get("degree") or "").strip().lower()
@@ -201,8 +214,22 @@ def match_role(role: dict, profile: dict, today: _dt.date | None = None) -> dict
 
 def shortlist(roles: list[dict], profile: dict, today: _dt.date | None = None) -> list[dict]:
     """Match every role and return the fits, ranked by score
-    (highest first, then the earliest deadline)."""
+    (highest first, then the earliest deadline). The same role
+    can arrive twice (two sites list it, or the caller passes
+    it twice) — the shortlist holds it once, with its best
+    score. A role with no id at all cannot be deduped and is
+    kept as-is."""
     matched = [match_role(r, profile, today) for r in roles]
     fits = [m for m in matched if m["fits"]]
+    best: dict[str, dict] = {}
+    unidentified: list[dict] = []
+    for m in fits:
+        if not m["role_id"]:
+            unidentified.append(m)
+            continue
+        prev = best.get(m["role_id"])
+        if prev is None or m["score"] > prev["score"]:
+            best[m["role_id"]] = m
+    fits = list(best.values()) + unidentified
     fits.sort(key=lambda m: (-m["score"], m["deadline"] or "9999-12-31"))
     return fits
