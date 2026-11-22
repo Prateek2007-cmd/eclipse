@@ -3,3 +3,15 @@
 fastapi==0.165.0
 uvicorn[standard]==0.54.0
 cryptography==50.0.2
+# RAG (server/rag/embed.py, store.py) imports numpy — without it the
+# server fails to start (ModuleNotFoundError). Verified 2026-11-22.
+numpy==2.5.5
+# RAG (Sprint 6): the store and the embeddings path imported these
+# lazily, so a fresh clone installed from this file could not run
+# RAG at all — GET /rag/status 500'd and 9 tests errored with
+# ModuleNotFoundError. Pinned to the versions verified 2026-11-22
+# (Python 3.12): with these plus the model files from
+# scripts/download_rag_model.py, tests.test_rag passes 11/11.
+sqlite-vec==0.1.9
+onnxruntime==1.32.0
+tokenizers==0.23.3
