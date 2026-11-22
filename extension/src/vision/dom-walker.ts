@@ -66,23 +66,86 @@ const INTERACTABLE_TAGS = new Set([
   "summary",
 ]);
 
-function isHidden(el: Element): boolean {
+/** The next ancestor of an element, crossing shadow-root and
+ *  same-origin-iframe boundaries (null at the top document).
+ *  parentElement alone stops at a shadow root (the top shadow
+ *  child's parentElement is null) and at a document boundary. */
+function nextAncestor(el: Element): Element | null {
+  if (el.parentElement) return el.parentElement;
+  // Shadow boundary: continue from the host element.
+  const root =
+    typeof el.getRootNode === "function" ? el.getRootNode() : null;
+  const host = (root as { host?: Element } | null)?.host;
+  if (host) return host;
+  // Iframe boundary: continue from the embedding <iframe> in the
+  // parent document (null for the top document's window).
+  try {
+    const win = el.ownerDocument?.defaultView as unknown as
+      | { frameElement?: Element | null }
+      | null
+      | undefined;
+    if (win?.frameElement) return win.frameElement;
+  } catch {
+    // Cross-origin or no window; stop here.
+  }
+  return null;
+}
+
+type ComputedStyleLike = { display: string; visibility: string };
+
+/** The element's computed style in a real browser (null in
+ *  linkedom, which has no layout). The window is resolved from
+ *  the element's OWN document — an ancestor across an iframe
+ *  boundary lives under a different window. */
+function computedStyleOf(el: Element): ComputedStyleLike | null {
+  const win = el.ownerDocument?.defaultView as unknown as
+    | { getComputedStyle?: (e: Element) => ComputedStyleLike }
+    | null
+    | undefined;
+  if (!win?.getComputedStyle) return null;
+  try {
+    return win.getComputedStyle(el);
+  } catch {
+    // No layout in this context.
+    return null;
+  }
+}
+
+/** Hidden by the element's own attributes / inline style.
+ *  `checkVisibility` is true only for the element itself (see
+ *  isHidden for why ancestors are not checked for visibility). */
+function hiddenByOwnStyle(el: Element, checkVisibility: boolean): boolean {
   if (el.hasAttribute("hidden")) return true;
   const style = (el.getAttribute("style") ?? "").toLowerCase();
   if (/display\s*:\s*none/.test(style)) return true;
-  if (/visibility\s*:\s*hidden/.test(style)) return true;
-  // Real browsers: also check computed style; linkedom has none.
-  const win = el.ownerDocument?.defaultView as unknown as
-    | { getComputedStyle?: (e: Element) => { display: string; visibility: string } }
-    | null
-    | undefined;
-  if (win?.getComputedStyle) {
-    try {
-      const cs = win.getComputedStyle(el);
-      if (cs.display === "none" || cs.visibility === "hidden") return true;
-    } catch {
-      // No layout in this context; fall through.
-    }
+  if (checkVisibility && /visibility\s*:\s*hidden/.test(style)) return true;
+  return false;
+}
+
+function isHidden(el: Element): boolean {
+  // The element itself: hidden attribute, inline style, computed
+  // style (display or visibility). Real browsers have computed
+  // style; linkedom has none.
+  if (hiddenByOwnStyle(el, true)) return true;
+  const selfCs = computedStyleOf(el);
+  if (selfCs && (selfCs.display === "none" || selfCs.visibility === "hidden")) {
+    return true;
+  }
+  // Ancestors: display:none on ANY ancestor removes the whole
+  // subtree — a button inside a display:none container keeps its
+  // own computed display (the computed value is the element's
+  // own specified value), so checking only the element walked
+  // invisible controls as visible and the executor would click
+  // what the user cannot see. Ancestors are NOT checked for
+  // visibility: it is inherited but overridable, so a child with
+  // visibility:visible inside a visibility:hidden parent IS
+  // rendered.
+  let cur = nextAncestor(el);
+  while (cur) {
+    if (hiddenByOwnStyle(cur, false)) return true;
+    const cs = computedStyleOf(cur);
+    if (cs && cs.display === "none") return true;
+    cur = nextAncestor(cur);
   }
   return false;
 }
@@ -181,6 +244,81 @@ function rectOf(el: Element): { x: number; y: number; width: number; height: num
   return { x: 0, y: 0, width: 0, height: 0 };
 }
 
+/** All elements in document order, descending into open shadow
+ *  roots and same-origin iframes. querySelectorAll("*") alone
+ *  never pierces either, so web-component forms and embedded
+ *  same-origin frames were invisible to the walker (their PII
+ *  was never observed — and their fields never plannable).
+ *  A cross-origin iframe throws on contentDocument access and
+ *  is skipped; a closed shadow root has shadowRoot null and is
+ *  skipped the same way. Each element carries its viewport
+ *  offset (dx, dy): shadow children share the host's space
+ *  (offset 0), but an iframe's document lives in the iframe's
+ *  own viewport, so its elements' rects must be shifted by the
+ *  iframe's position — without that, planner clicks and
+ *  blackout boxes inside an iframe land in the wrong place. */
+function allElements(doc: Document): { el: Element; dx: number; dy: number }[] {
+  const out: { el: Element; dx: number; dy: number }[] = [];
+  const visit = (root: Document | ShadowRoot, dx: number, dy: number): void => {
+    for (const el of Array.from(root.querySelectorAll("*"))) {
+      out.push({ el, dx, dy });
+      if (el.shadowRoot) visit(el.shadowRoot, dx, dy);
+      if (el.tagName.toLowerCase() === "iframe") {
+        try {
+          const inner = (el as HTMLIFrameElement).contentDocument;
+          if (inner) {
+            const r = rectOf(el);
+            visit(inner, dx + r.x, dy + r.y);
+          }
+        } catch {
+          // Cross-origin iframe: unreadable by design.
+        }
+      }
+    }
+  };
+  visit(doc, 0, 0);
+  return out;
+}
+
+/** Tags that can own a form association (the form-associated
+ *  elements a `form="…"` attribute can bind). */
+const FORM_ASSOCIATED_TAGS = new Set([
+  "button",
+  "fieldset",
+  "input",
+  "object",
+  "output",
+  "select",
+  "textarea",
+]);
+
+/** Whether the element belongs to a form — by ancestry, by the
+ *  IDL form owner, or by a `form="…"` attribute naming a form
+ *  elsewhere in the document. closest("form") alone misses the
+ *  attribute case: a submit button outside its <form> with
+ *  form="f1" still submits it, and the server's
+ *  consequential-action check reads this flag. The IDL `.form`
+ *  covers both cases in a real browser; the attribute lookup is
+ *  the fallback for runtimes (linkedom) that do not implement
+ *  the IDL. The lookup is scoped to the element's own tree
+ *  (shadow roots included) — a form association never crosses
+ *  a shadow boundary. */
+function inFormOf(el: Element, doc: Document): boolean {
+  if (el.closest("form") !== null) return true;
+  if (!FORM_ASSOCIATED_TAGS.has(el.tagName.toLowerCase())) return false;
+  // IDL form owner (real browsers).
+  const idl = (el as { form?: { tagName?: string } | null }).form;
+  if (idl && typeof idl.tagName === "string" && idl.tagName.toLowerCase() === "form") {
+    return true;
+  }
+  // form="id" attribute (fallback when the IDL is unavailable).
+  const formId = el.getAttribute("form")?.trim();
+  if (!formId) return false;
+  const root = typeof el.getRootNode === "function" ? el.getRootNode() : doc;
+  const owner = (root as Document).getElementById?.(formId);
+  return !!owner && owner.tagName.toLowerCase() === "form";
+}
+
 export interface WalkOptions {
   /** Maximum elements to return (plan: DOM walk is cheap; cap at 2000). */
   maxElements?: number;
@@ -200,10 +338,10 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
   const maxElements = opts.maxElements ?? 2000;
   const out: ElementInfo[] = [];
   const nodes = new Map<string, Element>();
-  const all = doc.querySelectorAll("*");
+  const all = allElements(doc);
   let n = 0;
   let truncated = false;
-  for (const el of Array.from(all)) {
+  for (const { el, dx, dy } of all) {
     if (out.length >= maxElements) {
       truncated = true;
       break;
@@ -212,7 +350,17 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
     if (tag === "script" || tag === "style" || tag === "head" || tag === "meta" || tag === "link") {
       continue;
     }
-    if (isHidden(el)) continue;
+    // A hidden input is not visible or clickable, but it IS
+    // walked: its value is submitted with the form, so the
+    // redactor must see it. This check comes BEFORE isHidden:
+    // in a real browser the UA stylesheet gives type=hidden
+    // inputs display:none, so getComputedStyle reports them
+    // hidden and the isHidden skip below would drop them before
+    // the carve-out was ever reached (linkedom has no
+    // getComputedStyle, so the tests never caught it).
+    const type = (el.getAttribute("type") ?? "").toLowerCase();
+    const isHiddenInput = tag === "input" && type === "hidden";
+    if (!isHiddenInput && isHidden(el)) continue;
     // Ids must be unique and stable in one walk. A duplicate explicit
     // id keeps the FIRST occurrence (matching resolveElement's
     // first-wins); later duplicates get a synthetic id. And synthetic
@@ -231,7 +379,6 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
     } else {
       n += 1;
     }
-    const type = (el.getAttribute("type") ?? "").toLowerCase();
     const nameText = accessibleName(el, doc);
     const labelText = [
       el.getAttribute("aria-label") ?? "",
@@ -250,11 +397,15 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
         el.getAttribute("value") ||
         "";
     }
-    const rect = rectOf(el);
+    const rawRect = rectOf(el);
+    // Elements inside an iframe report rects in the iframe's
+    // viewport — shift them into the top page's space (dx/dy
+    // are 0 for top-level and shadow-DOM elements).
+    const rect =
+      dx === 0 && dy === 0
+        ? rawRect
+        : { x: rawRect.x + dx, y: rawRect.y + dy, width: rawRect.width, height: rawRect.height };
     const disabled = el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true";
-    // A hidden input is not visible or clickable, but it IS walked:
-    // its value is submitted with the form, so the redactor must see it.
-    const isHiddenInput = tag === "input" && type === "hidden";
     const interactable =
       !disabled &&
       !isHiddenInput &&
@@ -278,7 +429,7 @@ function walkInternal(doc: Document, opts: WalkOptions = {}): {
       // and the form membership (a type=submit button, or any
       // button inside a form, is a submit).
       type: type || undefined,
-      inForm: el.closest("form") !== null,
+      inForm: inFormOf(el, doc),
       rect,
       visible: !isHiddenInput,
       interactable,

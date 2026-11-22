@@ -18,6 +18,14 @@ export const PII_PATTERNS: { type: PiiType; pattern: RegExp }[] = [
     pattern: /\b(?:\d{4}[\s-]?){3}\d{4}\b/g,
   },
   {
+    type: "card_number",
+    // American Express: 15 digits in a 4-6-5 grouping
+    // ("3782 822463 10005"). The 16-digit pattern above cannot
+    // match it, so Amex numbers reached the planner unredacted.
+    // (Same gap was fixed server-side in server/planner/scan.py.)
+    pattern: /\b\d{4}[\s-]?\d{6}[\s-]?\d{5}\b/g,
+  },
+  {
     type: "aadhaar",
     pattern: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
   },
@@ -28,15 +36,50 @@ export const PII_PATTERNS: { type: PiiType; pattern: RegExp }[] = [
     pattern: /\b[A-Z]{5}\d{4}[A-Z]\b/gi,
   },
   {
+    type: "upi",
+    // UPI IDs have no dot-TLD, so the email pattern misses them
+    // ("aarav@okhdfcbank", "9999988888@paytm"). The handle is a
+    // curated list of common UPI handles (banks, wallets, apps);
+    // `ok[a-z]+` covers the ok-bank family (okhdfcbank, okaxis,
+    // okicici, oksbi, okbizaxis …). A bare "word@word" is NOT
+    // matched — it false-positives on prose ("meet@noon").
+    pattern:
+      /\b[A-Za-z0-9._%+-]{2,}@(?:ok[a-z]+|paytm|ybl|axl|ibl|upi|barodampay|mahb|kotak|hdfcbank|icici|axisbank|sbi|freecharge|amazonpay|gpay|phonepe|slice|yesbank|federal|idfcfirst|jupiteraxis|rbl|indus|aubank|equitas|jiopay|airtel|payzapp|mobikwik|bhim|cred|navi)\b/gi,
+  },
+  {
+    type: "passport",
+    // Indian passport: one letter + seven digits ("A1234567").
+    // Case-insensitive: OCR output lowercases. US passports are
+    // nine bare digits — too generic to pattern-match safely.
+    pattern: /\b[A-Z]\d{7}\b/gi,
+  },
+  {
     type: "phone",
-    // Indian mobile, with or without +91 and separators.
-    pattern: /(?:\+91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}\b/g,
+    // Indian mobile, with or without +91 and separators. The
+    // (?<!\d) guard stops the pattern matching a 10-digit
+    // substring of a longer digit run ("19876543210" used to
+    // redact as "1[PHONE_1]" — a mislabelled partial match).
+    pattern: /(?<!\d)(?:\+91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}\b/g,
+  },
+  {
+    type: "phone",
+    // North-American numbers, with or without the +1 country
+    // code and with or without parentheses: "+1 (415) 555-0132",
+    // "415-555-0132", "4155550132". The overlap dedup in
+    // findPatternPii keeps the longer card match when this
+    // pattern fires inside a 16-digit card number.
+    pattern: /(?<!\d)(?:\+?1[\s-]?)?\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}\b/g,
   },
   {
     type: "dob",
     // Month names case-insensitive: OCR output lowercases.
+    // Day-first ("01 Jan 2005"), month-first ("Jan 15, 1990"),
+    // slashes ("15/01/1990") and dashes ("15-01-1990"). ISO
+    // yyyy-mm-dd ("2026-12-01") is DELIBERATELY not matched: the
+    // safe paragraph in pii-text.html carries one, and a bare
+    // ISO date is usually a workshop / order date, not a DOB.
     pattern:
-      /\b\d{2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{4}\b|\b\d{2}\/\d{2}\/\d{4}\b/gi,
+      /\b\d{2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{4}\b|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s\d{1,2},?\s\d{4}\b|\b\d{2}\/\d{2}\/\d{4}\b|\b\d{2}-\d{2}-\d{4}\b/gi,
   },
 ];
 
@@ -51,6 +94,8 @@ export const SENSITIVE_FIELD_LABELS: { type: PiiType; match: RegExp; not?: RegEx
   { type: "card_number", match: /card.?num|card.?no|cc.?num/i },
   { type: "pan", match: /\bpan\b|permanent.?account/i },
   { type: "aadhaar", match: /aadhaar|aadhar|uidai/i },
+  { type: "upi", match: /\bupi\b/i },
+  { type: "passport", match: /passport/i },
   { type: "name", match: /name/i, not: /file|domain|host|site/i },
   { type: "address", match: /address|street/i },
   { type: "dob", match: /date.?of.?birth|\bdob\b|birth.?date/i },
