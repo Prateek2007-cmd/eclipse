@@ -101,3 +101,49 @@ def build_plan_prompt(goal: str, constraints: str, memory_facts: list[str]) -> s
     if memory_facts:
         parts.append("REMEMBERED FACTS:\n" + "\n".join(memory_facts[:10]))
     return "\n\n".join(parts)
+
+
+def build_intake_prompt(message: str) -> str:
+    """Turn one chat message into a mission draft (PR #5 intake).
+
+    `message` must already be PII-redacted by the caller
+    (server/missions/intake.py redacts before building this
+    prompt — the planner never sees raw emails, phones, or
+    other personal details from the chat message). The planner
+    returns ONE JSON object, nothing else.
+    """
+    instructions = """\
+You draft Eclipse missions from one chat message. Return ONE JSON object, nothing else (no prose, no markdown fence):
+{"type": "job_hunt" | "cold_mail" | "price_watch",
+ "name": "<short mission name>",
+ "config": { ... type-specific, see below ... },
+ "bounds": { ... bounds, see below ... },
+ "missing_fields": ["<config/bounds fields the message did not say enough to fill>"]}
+
+Type configs (only the fields listed here exist — do not invent others):
+- job_hunt: {"sources": ["gmail", "pasted"], "min_score": 60,
+  "stipend_min": <int rupees/month or null>, "locations": [...],
+  "roles": [], "watch_new_only": true}
+- cold_mail: {"role_ids": [], "roles": [], "recipients": [],
+  "attach_resume": false, "max_drafts_per_run": 5}
+- price_watch: {"url": "<required>", "selector": "<required, a CSS
+  selector — you cannot know it, so put it in missing_fields
+  unless the message states one>", "condition": "changed",
+  "target_price": <number or null>, "currency": "INR",
+  "one_shot": true}
+Bounds: {"max_actions_per_day": 5, "max_applies_per_day": 3,
+  "max_sends_per_day": 5, "max_spend_inr": 0, "allowed_sites": [],
+  "require_approval_for": ["apply", "send"], "auto_approve": false,
+  "quiet_hours_ist": null, "min_score": 60}
+Rules:
+- Only use what the message actually says. Never invent a
+  recipient address, a site, a role, a URL, or a price.
+  Anything the message does not say goes in missing_fields,
+  never in the draft as a guess.
+- "apply to at most 3 a day" means max_applies_per_day 3.
+  "at most 5 mails a day" means max_sends_per_day 5.
+- A price target ("tell me when it drops below 4999 rupees") is
+  a price_watch with target_price 4999.
+- When the message names no type clearly, pick the closest one
+  and list what is missing to be sure in missing_fields."""
+    return f"{instructions}\n\nMESSAGE (PII-redacted): {message}"
