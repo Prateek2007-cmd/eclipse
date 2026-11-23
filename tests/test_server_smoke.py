@@ -32,6 +32,10 @@ EXPECTED_TABLES = {
     "audit_log", "rag_chunks", "watches", "grants", "quota", "receipts",
     "mail_drafts", "mail_log", "connectors", "calendar_events",
     "watch_events", "briefings", "pending_approvals",
+    "missions", "mission_runs", "mission_activity",
+    # PR #5 fact store: the FTS5 virtual table + its shadow tables.
+    "facts_fts", "facts_fts_config", "facts_fts_content",
+    "facts_fts_data", "facts_fts_docsize", "facts_fts_idx",
 }
 
 

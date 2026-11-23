@@ -9,6 +9,17 @@
  *     endpoint is token-authenticated, so a 401 still proves the
  *     server is up — it only proves the token is missing/bad).
  *
+ * What it writes (PR #5 token-handoff fix): the token input
+ * below saves the pasted token to chrome.storage.local
+ * ("eclipseToken"). This is the ONLY write path for that key in
+ * the extension — before it existed, nothing ever stored the
+ * token, so every alarm run failed and no watch or briefing
+ * ever ran. Saving also fires background.ts's
+ * storage.onChanged listener, which schedules the watch and
+ * briefing alarms. The stored value is never read back into
+ * the input or displayed anywhere — the popup only shows
+ * "Saved".
+ *
  * What it does NOT do, on purpose:
  *   - no current-task lookup: the background script keeps no task
  *     state and exposes no task message, so the popup honestly
@@ -91,7 +102,7 @@ async function refreshStatus(): Promise<void> {
 
   const token = await readToken();
   if (token === null) {
-    setRow("token-dot", "token-text", "warn", "Not saved — open the workspace once");
+    setRow("token-dot", "token-text", "warn", "Not saved — paste the token below");
   } else {
     setRow("token-dot", "token-text", "ok", "Saved");
   }
@@ -105,7 +116,7 @@ async function refreshStatus(): Promise<void> {
       setRow("server-dot", "server-text", "ok", "Reachable — save a token to verify it");
       break;
     case "rejected":
-      setRow("server-dot", "server-text", "bad", "Running, but the saved token was rejected — reopen the workspace");
+      setRow("server-dot", "server-text", "bad", "Running, but the saved token was rejected — paste the token again below");
       break;
     case "unreachable":
       setRow("server-dot", "server-text", "bad", "Not reachable — is the local server running?");
@@ -117,6 +128,54 @@ async function refreshStatus(): Promise<void> {
 
   if (refresh instanceof HTMLButtonElement) refresh.disabled = false;
 }
+
+function setSaveText(text: string): void {
+  const el = document.getElementById("token-save-text");
+  if (el) el.textContent = text;
+}
+
+/** Save the pasted token to chrome.storage.local. The input is
+ * cleared immediately and the value is never displayed — the
+ * popup only ever shows "Saved". Saving triggers the
+ * background script's storage.onChanged listener, which
+ * schedules the watch + briefing alarms. */
+async function saveToken(): Promise<void> {
+  const input = document.getElementById("token-input");
+  const save = document.getElementById("save-token");
+  if (!(input instanceof HTMLInputElement)) return;
+  const value = input.value.trim();
+  if (value.length === 0) {
+    setSaveText("Paste a token first.");
+    input.focus();
+    return;
+  }
+  if (save instanceof HTMLButtonElement) save.disabled = true;
+  try {
+    await chrome.storage.local.set({ eclipseToken: value });
+    // Clear the field at once: the token must not sit visible
+    // in the popup after saving.
+    input.value = "";
+    setSaveText("Saved — watches and the morning briefing are now scheduled.");
+  } catch {
+    setSaveText("Could not save the token — try again.");
+    if (save instanceof HTMLButtonElement) save.disabled = false;
+    return;
+  }
+  if (save instanceof HTMLButtonElement) save.disabled = false;
+  // Re-probe with the new token so the status rows update.
+  await refreshStatus();
+}
+
+document.getElementById("save-token")?.addEventListener("click", () => {
+  void saveToken();
+});
+
+document.getElementById("token-input")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void saveToken();
+  }
+});
 
 document.getElementById("refresh")?.addEventListener("click", () => {
   void refreshStatus();

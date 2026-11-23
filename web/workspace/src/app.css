@@ -286,7 +286,10 @@
 /* Key/value display (profile, RAG status, Drive resume). */
 .kv {
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* minmax(0, 1fr): a bare 1fr has a min-content floor, so one
+   * long unbroken value (a mission config's roles JSON) forced
+   * the grid wider than the viewport. The value cell wraps. */
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--space-1) var(--space-4);
   margin: 0 0 var(--space-3) 0;
 }
@@ -297,6 +300,7 @@
 
 .kv dd {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Forms ---------- */

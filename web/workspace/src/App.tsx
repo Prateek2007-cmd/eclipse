@@ -1,6 +1,7 @@
 import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, clearToken, getToken, setToken, type QuotaModel } from "./api";
 import { AgentView } from "./views/AgentView";
+import { MissionsView } from "./views/MissionsView";
 import { JobsView } from "./views/JobsView";
 import { MailView } from "./views/MailView";
 import { WatchesView } from "./views/WatchesView";
@@ -18,6 +19,7 @@ const BoundaryScene = lazy(() =>
 
 type ViewId =
   | "agent"
+  | "missions"
   | "jobs"
   | "mail"
   | "watches"
@@ -29,6 +31,7 @@ type ViewId =
 
 const VIEWS: { id: ViewId; label: string; short: string }[] = [
   { id: "agent", label: "Agent", short: "Ag" },
+  { id: "missions", label: "Missions", short: "Mi" },
   { id: "jobs", label: "Jobs", short: "Jo" },
   { id: "mail", label: "Mail", short: "Ma" },
   { id: "watches", label: "Watches & Briefing", short: "Wa" },
@@ -349,6 +352,16 @@ export default function App() {
             <ViewErrorBoundary key={view} name={currentLabel}>
               {view === "agent" && (
                 <AgentView token={token} selectedId={selectedId} onSelect={setSelectedId} />
+              )}
+              {view === "missions" && (
+                <MissionsView
+                  token={token}
+                  onSelectTask={(id) => {
+                    setSelectedId(id);
+                    setView("agent");
+                  }}
+                  onGoToJobs={() => setView("jobs")}
+                />
               )}
               {view === "jobs" && <JobsView token={token} />}
               {view === "mail" && <MailView token={token} />}

@@ -91,6 +91,53 @@
     color: var(--secondary);
   }
 
+  .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+  }
+
+  .token-form {
+    margin-top: 12px;
+  }
+
+  .token-form > p {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--secondary);
+  }
+
+  .token-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .token-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .token-row input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .token-row button {
+    flex: 0 0 auto;
+    padding: 10px 16px;
+  }
+
+  .save-text {
+    min-height: 19px;
+  }
+
   .actions {
     display: flex;
     gap: 8px;
@@ -185,6 +232,19 @@
         <p id="task-text">No task running</p>
       </div>
     </div>
+  </section>
+
+  <section class="card token-form" aria-label="Save server token">
+    <h2>Server token</h2>
+    <p>Paste the token from <span class="mono">data/.eclipse-token</span> on the
+    server &mdash; the same token the workspace asks for. It is stored only in
+    this browser and never shown again.</p>
+    <div class="token-row">
+      <input id="token-input" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Paste token&hellip;" aria-label="Server token">
+      <button id="save-token" class="primary" type="button">Save</button>
+    </div>
+    <p id="token-save-text" class="save-text" aria-live="polite"></p>
   </section>
 
   <div class="actions">

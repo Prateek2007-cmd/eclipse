@@ -484,6 +484,153 @@ export type RagStatus = {
   model_available: boolean;
 };
 
+/** ---- missions (PR #5) ---- */
+
+export type MissionType = "job_hunt" | "cold_mail" | "price_watch";
+
+export type MissionStatus = "draft" | "active" | "paused" | "stopped" | "done";
+
+export type MissionBounds = {
+  max_actions_per_day: number;
+  max_applies_per_day: number;
+  max_sends_per_day: number;
+  max_spend_inr?: number;
+  allowed_sites: string[];
+  require_approval_for: string[];
+  auto_approve: boolean;
+  quiet_hours_ist?: { start: string; end: string } | null;
+  min_score?: number;
+};
+
+export type Mission = {
+  id: string;
+  type: MissionType;
+  name: string;
+  status: MissionStatus;
+  config: Record<string, unknown>;
+  bounds: MissionBounds;
+  created_at: number;
+  updated_at: number;
+  last_run_at: number | null;
+  next_run_at: number | null;
+  last_run_status: string | null;
+  last_error: string | null;
+};
+
+/** A mission draft from POST /missions/intake — the POST
+ * /missions body minus status. */
+export type MissionDraft = {
+  type: MissionType;
+  name: string;
+  config: Record<string, unknown>;
+  bounds: Partial<MissionBounds>;
+};
+
+export type IntakeResponse = {
+  draft: MissionDraft;
+  source: "planner" | "rules";
+  confidence: "high" | "low";
+  missing_fields: string[];
+  warnings: string[];
+};
+
+export type MissionActivity = {
+  id: string;
+  mission_id: string;
+  run_id: string | null;
+  kind: string;
+  /** Redacted JSON, as a string — parse it before rendering. */
+  detail: string;
+  created_at: number;
+};
+
+export type MissionTask = {
+  id: string;
+  goal: string;
+  status: string;
+  created_at: number;
+};
+
+/** A live pending approval on one of a mission's spawned
+ * tasks. Same shape as PendingApproval plus the draft id
+ * for mail-send approvals. */
+export type MissionApproval = {
+  approval_id: string;
+  task_id: string;
+  step: number | null;
+  action: string;
+  element_id?: string;
+  role_id?: string;
+  draft_id?: string;
+  created_at: number;
+  expires_at: number;
+};
+
+export type MissionDetail = {
+  mission: Mission;
+  activity: MissionActivity[];
+  tasks: MissionTask[];
+  pending_approvals: MissionApproval[];
+};
+
+/** One mission type from GET /missions/types — the registry
+ * entry the server validates config against. The config
+ * schema shape is server-defined; the view renders config
+ * as editable JSON rather than guessing its fields. */
+export type MissionTypeSpec = {
+  type: MissionType;
+  label: string;
+  config_schema: Record<string, unknown>;
+  default_bounds: MissionBounds;
+  default_interval_min: number;
+};
+
+/** The stored resume, as GET /missions/resume reports it.
+ * `extraction` is "ok" when the resume parsed cleanly,
+ * "limited" when only some fields came out, "failed" when
+ * parsing found nothing usable. */
+export type ResumeStatus = {
+  stored: boolean;
+  filename: string | null;
+  uploaded_at: number | null;
+  extraction: "ok" | "limited" | "failed" | null;
+  detail: string | null;
+};
+
+/** The server's resume shape (missions_runner_api
+ * _resume_response): no `stored` flag, `stored_at` not
+ * `uploaded_at`, `extraction_status` not `extraction`,
+ * `note` not `detail`. The client maps it — the server is
+ * the contract. Integration-verified against the live server
+ * (an earlier build cast the raw shape to ResumeStatus, so
+ * `stored` was undefined and the UI always said no resume
+ * was stored). */
+type ServerResume = {
+  filename: string | null;
+  stored_name?: string;
+  stored_path?: string;
+  size_bytes?: number;
+  extraction_status?: string;
+  extracted_text?: string;
+  stored_at?: number;
+  note?: string;
+};
+
+function toResumeStatus(r: ServerResume): ResumeStatus {
+  return {
+    stored: true,
+    filename: r.filename ?? null,
+    uploaded_at: r.stored_at ?? null,
+    extraction:
+      r.extraction_status === "ok"
+        ? "ok"
+        : r.extraction_status === "limited"
+          ? "limited"
+          : "failed",
+    detail: r.note ?? null,
+  };
+}
+
 /** The server's real shapes (what the endpoints return). */
 type ServerQuotaRow = {
   model: string;
@@ -1019,4 +1166,148 @@ export const api = {
   verifyAudit: () => call<AuditVerifyResult>("/audit/verify"),
   exportAudit: () =>
     call<{ exported_at: number; entries: AuditEntry[] }>("/audit/export"),
+
+  // ---- missions ----
+  /** Chat intake: free text in, a draft mission out. The
+   * server labels the source — "planner" or "rules" — and
+   * the UI must show it, never hide it. A planner failure
+   * falls through to the rule path server-side; it is not
+   * an error here. */
+  intakeMission: (message: string) =>
+    call<IntakeResponse>("/missions/intake", {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  createMission: (body: {
+    type: MissionType;
+    name: string;
+    config: Record<string, unknown>;
+    bounds?: Partial<MissionBounds>;
+  }) =>
+    call<Mission>("/missions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listMissions: (status?: string) =>
+    call<{ missions: Mission[] }>(
+      status
+        ? `/missions?status=${encodeURIComponent(status)}`
+        : "/missions",
+    ),
+  /** The doc shows GET /missions/{id} as {mission, activity,
+   * tasks, pending_approvals}; if the server ever returns the
+   * mission flat (like getTask), adapt it here so the view
+   * never has to guess. */
+  getMission: async (id: string): Promise<MissionDetail> => {
+    const s = await call<Record<string, unknown>>(`/missions/${id}`);
+    if (s.mission && typeof s.mission === "object") {
+      return {
+        mission: s.mission as Mission,
+        activity: (s.activity as MissionActivity[]) ?? [],
+        tasks: (s.tasks as MissionTask[]) ?? [],
+        pending_approvals: (s.pending_approvals as MissionApproval[]) ?? [],
+      };
+    }
+    // Flat shape: the mission fields sit at the top level.
+    const { activity, tasks, pending_approvals, ...mission } = s;
+    return {
+      mission: mission as unknown as Mission,
+      activity: (activity as MissionActivity[]) ?? [],
+      tasks: (tasks as MissionTask[]) ?? [],
+      pending_approvals: (pending_approvals as MissionApproval[]) ?? [],
+    };
+  },
+  updateMission: (
+    id: string,
+    body: {
+      name?: string;
+      config?: Record<string, unknown>;
+      bounds?: Partial<MissionBounds>;
+    },
+  ) =>
+    call<Mission>(`/missions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  activateMission: (id: string) =>
+    call<Mission>(`/missions/${id}/activate`, { method: "POST" }),
+  pauseMission: (id: string) =>
+    call<Mission>(`/missions/${id}/pause`, { method: "POST" }),
+  resumeMission: (id: string) =>
+    call<Mission>(`/missions/${id}/resume`, { method: "POST" }),
+  stopMission: (id: string) =>
+    call<Mission>(`/missions/${id}/stop`, { method: "POST" }),
+  /** Run-now only schedules an immediate tick; the runner
+   * picks it up — nothing runs inline. */
+  runMissionNow: (id: string) =>
+    call<Mission>(`/missions/${id}/run-now`, { method: "POST" }),
+  deleteMission: (id: string) =>
+    call<{ deleted: string }>(`/missions/${id}`, { method: "DELETE" }),
+  missionActivity: (id: string, limit = 50, kind?: string) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (kind) params.set("kind", kind);
+    return call<{ mission_id: string; activity: MissionActivity[] }>(
+      `/missions/${id}/activity?${params}`,
+    );
+  },
+  missionApprovals: (id: string) =>
+    call<{ mission_id: string; approvals: MissionApproval[] }>(
+      `/missions/${id}/approvals`,
+    ),
+  /** Approve a mission mail draft for sending — through the
+   * TASK pending-approval gate, never the mail endpoint's
+   * accept-any-id behaviour. The approval_id must name a live
+   * pending approval recorded for this draft; on success the
+   * draft is marked approved and a draft-scoped grant is
+   * minted, so POST /mail/drafts/{id}/send consumes it.
+   * Task (non-draft) approvals use approveTask instead. */
+  approveMissionMail: (missionId: string, approvalId: string, draftId: string) =>
+    call<{ draft_id: string; status: string }>(
+      `/missions/${missionId}/approve-mail`,
+      {
+        method: "POST",
+        body: JSON.stringify({ approval_id: approvalId, draft_id: draftId }),
+      },
+    ),
+  missionTypes: () => call<{ types: MissionTypeSpec[] }>("/missions/types"),
+  /** Resume upload is multipart: FormData must set its own
+   * Content-Type boundary, so this bypasses the JSON `call`
+   * helper (which would force application/json) and repeats
+   * its 401 handling. The resume endpoints come from the
+   * PR #5 task spec — they are not in DESIGN.md §3.3, so
+   * verify the shapes against the server at integration. */
+  uploadResume: async (file: File): Promise<ResumeStatus> => {
+    const token = getToken();
+    if (!token) throw new Error("no token — paste the server token first");
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/missions/resume", {
+      method: "POST",
+      headers: { "X-Eclipse-Token": token },
+      body: form,
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new Event("eclipse-unauthorized"));
+      throw new Error("unauthorized — check the token");
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(
+        `${res.status} on /missions/resume: ${text.slice(0, 200)}`,
+      );
+    }
+    return toResumeStatus((await res.json()) as ServerResume);
+  },
+  pasteResumeText: async (resumeText: string): Promise<ResumeStatus> => {
+    // The server's ResumeTextIn takes `text`, not `resume_text`.
+    const r = await call<ServerResume>("/missions/resume-text", {
+      method: "POST",
+      body: JSON.stringify({ text: resumeText }),
+    });
+    return toResumeStatus(r);
+  },
+  getResume: async (): Promise<ResumeStatus> => {
+    const r = await call<ServerResume>("/missions/resume");
+    return toResumeStatus(r);
+  },
 };
