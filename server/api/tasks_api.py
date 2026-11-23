@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from ..core import db
 from ..core.auth import require_token
 from ..planner import validate
-from ..tasks import loop
+from ..tasks import approvals, loop
 
 router = APIRouter(tags=["tasks"])
 
@@ -266,103 +266,23 @@ def approve_step(task_id: str, body: ApproveIn, _token: str = Depends(require_to
     semantics as before (one approval = one action). The grant's
     scope comes from the pending record, not the request body:
     the client cannot widen what the gate asked for.
+
+    The gate itself lives in server/tasks/approvals.py
+    (approve_pending) — this endpoint is a thin HTTP wrapper
+    around it, so the mission runner's auto-satisfy path (PR #5,
+    Q1 standing approval) uses the exact same gate.
     """
     _task_or_404(task_id)
     conn = _conn()
     try:
-        import time
-        import uuid
-
-        from ..core import audit
-
-        now = int(time.time())
-        # Idempotency (§5.4: one approval, one grant): the same
-        # approval_id must not mint a second grant — a retried
-        # POST (a double-click, a network retry) is one approval,
-        # not two submits. The approval_id rides in the grant
-        # detail (it is metadata, not scope — see
-        # loop._consume_approval). Checked before the pending
-        # lookup, so a replay of a CONSUMED approval still 409s
-        # (its pending record is gone) instead of 404ing.
-        for row in conn.execute(
-            "SELECT detail FROM grants WHERE origin = ? AND scope = 'approve'",
-            (task_id,),
-        ).fetchall():
-            try:
-                existing = json.loads(row["detail"] or "{}")
-            except (ValueError, TypeError):
-                existing = {}
-            if existing.get("approval_id") == body.approval_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"approval {body.approval_id} already recorded for this task",
-                )
-        # The pending approval is the gate: unknown (or recorded
-        # for a different task) is a 404 — no pending record, no
-        # grant, whatever the task state.
-        pending = loop.get_pending_approval(conn, body.approval_id)
-        if pending is None or pending["task_id"] != task_id:
-            raise HTTPException(
-                status_code=404,
-                detail=f"no pending approval {body.approval_id} for this task",
-            )
-        # A finished task cannot be approved back to life.
-        task = loop.get_task(conn, task_id)
-        if task is not None and task["status"] in TERMINAL_TASK_STATUSES:
-            raise HTTPException(
-                status_code=409,
-                detail=f"task {task_id} is {task['status']}; refusing to approve",
-            )
-        # An expired approval is a 409, and the stale record is
-        # dropped so it cannot be approved later.
-        if int(pending["expires_at"] or 0) <= now:
-            loop.consume_pending_approval(conn, body.approval_id)
-            raise HTTPException(
-                status_code=409,
-                detail=f"approval {body.approval_id} has expired",
-            )
-        # Consume the pending approval FIRST, so a concurrent
-        # second POST finds nothing to consume (the grant replay
-        # check above is the second layer, not the only one).
-        loop.consume_pending_approval(conn, body.approval_id)
-        audit.append(
-            conn, task_id, "task.approve",
-            {"approval_id": body.approval_id},
-        )
         try:
-            scope = json.loads(pending["detail"] or "{}")
-        except (ValueError, TypeError):
-            scope = {}
-        detail = {
-            "approval_id": body.approval_id,
-            "step": pending["step"],
-            **{
-                k: v for k, v in {
-                    "element_id": scope.get("element_id"),
-                    "role_id": scope.get("role_id"),
-                }.items() if v is not None
-            },
-        }
-        conn.execute(
-            "INSERT INTO grants (id, origin, scope, expires_at, created_at, detail)"
-            " VALUES (?, ?, 'approve', ?, ?, ?)",
-            (uuid.uuid4().hex[:12], task_id, now + 600, now, json.dumps(detail)),
-        )
-        conn.execute(
-            "UPDATE tasks SET status = 'planned', updated_at = ?"
-            " WHERE id = ? AND status = 'ask_user'",
-            (now, task_id),
-        )
-        conn.commit()
-        task = loop.get_task(conn, task_id)
-        status = task["status"] if task else "planned"
+            return approvals.approve_pending(conn, task_id, body.approval_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     finally:
         conn.close()
-    # The task's real status, not "planned" unconditionally: the
-    # UPDATE above only fires from ask_user, so approving a task
-    # in any other state used to report "planned" while the task
-    # stayed where it was.
-    return {"task_id": task_id, "status": status, "approval_id": body.approval_id}
 
 
 @router.delete("/tasks/{task_id}/grants")

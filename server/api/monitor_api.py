@@ -13,8 +13,9 @@
   fresh observation. A firing is written to the audit log.
 - GET /monitor/events?watch_id=&limit= → the firing log.
 - POST /monitor/briefing → build the morning briefing (watch
-  firings + one Gmail scan). GET /monitor/briefing/latest → the
-  newest stored briefing.
+  firings + mission news + one Gmail scan). At most one build
+  per IST day unless {"force": true} is posted. GET
+  /monitor/briefing/latest → the newest stored briefing.
 
 All routes are token-gated. Watches only run while Chrome is
 open (chrome.alarms); the server never polls a page by itself.
@@ -92,6 +93,15 @@ class CheckIn(BaseModel):
 
 class MuteIn(BaseModel):
     minutes: int = Field(default=60, ge=1, le=1440)
+
+
+class BriefingIn(BaseModel):
+    # PR #5: without force, build_briefing returns the stored
+    # briefing when one was already built today (IST) — the
+    # server tick and the extension alarm both trigger a build,
+    # and the day guard makes the double trigger harmless.
+    # force=True (the workspace "Build now" button) always builds.
+    force: bool = False
 
 
 @router.post("/monitor/watches")
@@ -247,10 +257,12 @@ def list_events(watch_id: str | None = None,
 
 
 @router.post("/monitor/briefing")
-def build_briefing(_token: str = Depends(require_token)):
+def build_briefing(body: BriefingIn | None = None,
+                   _token: str = Depends(require_token)):
     conn = _conn()
     try:
-        return briefing_mod.build_briefing(conn)
+        force = body.force if body is not None else False
+        return briefing_mod.build_briefing(conn, force=force)
     finally:
         conn.close()
 
