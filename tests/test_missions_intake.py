@@ -165,6 +165,28 @@ class TestParseIntakeRulesPath(unittest.TestCase):
         result = self._rules("SDE intern roles, stipend 15k")
         self.assertEqual(result["draft"]["config"]["stipend_min"], 15000)
 
+    def test_rules_job_hunt_stipend_before_comma_not_cap(self):
+        # PR #6 verification: "min Rs 10,000 stipend, apply to
+        # at most 3 a day" parsed the stipend as 3 (the regex
+        # skipped the comma and took the cap number).
+        result = self._rules(
+            "watch for SDE intern roles in Hyderabad, min Rs 10,000"
+            " stipend, apply to at most 3 a day"
+        )
+        self.assertEqual(result["draft"]["config"]["stipend_min"], 10000)
+        self.assertEqual(result["draft"]["bounds"]["max_applies_per_day"], 3)
+
+    def test_rules_job_hunt_stipend_without_number_is_missing(self):
+        # A bare "stipend" followed by a cap must not capture
+        # the cap as the stipend — it stays a missing field.
+        result = self._rules(
+            "watch for SDE intern roles in Hyderabad, stipend,"
+            " apply to at most 3 a day"
+        )
+        self.assertIsNone(result["draft"]["config"]["stipend_min"])
+        self.assertIn("stipend_min", result["missing_fields"])
+        self.assertEqual(result["draft"]["bounds"]["max_applies_per_day"], 3)
+
     def test_rules_price_watch_extracts_url_and_target(self):
         result = self._rules(
             "watch the price of https://example.com/headphones and"
