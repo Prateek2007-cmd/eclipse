@@ -1,0 +1,8 @@
+<!-- Eclipse favicon (PR #6 Worker 11, bug #5): the eclipse
+     mark — a vermilion ring with the dark occluding disc —
+     on transparent. Served relative (./favicon.svg) because
+     the workspace lives at /workspace, not the server root. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <circle cx="15" cy="16" r="11" fill="none" stroke="#FF6B35" stroke-width="3"/>
+  <circle cx="21" cy="11" r="6" fill="#101C26"/>
+</svg>
