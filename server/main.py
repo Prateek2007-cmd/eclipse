@@ -12,8 +12,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import audit_api, connectors_api, jobs_api, mail_api, memory_api, monitor_api, proof_api, rag_api, system, tasks_api, vault_api
+from .api import audit_api, connectors_api, jobs_api, mail_api, memory_api, missions_api, missions_runner_api, monitor_api, proof_api, rag_api, system, tasks_api, vault_api
 from .core import config, db
+from .missions import runner as missions_runner
 
 logger = logging.getLogger("eclipse.main")
 
@@ -22,6 +23,9 @@ logger = logging.getLogger("eclipse.main")
 async def lifespan(_app: FastAPI):
     db.migrate()
     config.get_token()  # generate + persist; never logged
+    # PR #5: the mission runner thread (60s tick, daemon). It is
+    # a no-op until a mission is active; ticks never raise.
+    missions_runner.start_runner()
     yield
 
 
@@ -57,6 +61,12 @@ app.include_router(rag_api.router)
 app.include_router(proof_api.router)
 app.include_router(connectors_api.router)
 app.include_router(monitor_api.router)
+# PR #5: missions. The runner router MUST be mounted BEFORE
+# missions_api: GET /missions/due (and /missions/resume) would
+# otherwise match missions_api's GET /missions/{mission_id}
+# with id "due" / "resume".
+app.include_router(missions_runner_api.router)
+app.include_router(missions_api.router)
 
 # Sprint 9: the workspace (Vite + React build) is served from the
 # local server at /workspace. No token is needed to load the page
