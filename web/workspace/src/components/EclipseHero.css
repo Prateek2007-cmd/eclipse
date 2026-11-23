@@ -1,0 +1,30 @@
+/* EclipseHero (PR #6, Worker 9): the hero 3D moment on the
+ * starting page — a small jewel above the greeting, never a
+ * distraction. The 3D canvas and the static SVG fallback
+ * share this one box, so the swap never shifts the layout. */
+
+.eclipse-hero {
+  width: 160px;
+  height: 160px;
+  flex: none;
+}
+
+.eclipse-hero svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The React Three Fiber canvas fills the same box. */
+.eclipse-hero > div {
+  width: 100%;
+  height: 100%;
+}
+
+/* Phones get the static SVG in a smaller box — no WebGL. */
+@media (max-width: 640px) {
+  .eclipse-hero {
+    width: 128px;
+    height: 128px;
+  }
+}
