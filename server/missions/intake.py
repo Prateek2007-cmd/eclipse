@@ -56,7 +56,10 @@ _TARGET_PRICE_RE = re.compile(
     re.IGNORECASE,
 )
 _STIPEND_RE = re.compile(
-    r"stipend[^0-9]{0,20}₹?\s*(\d[\d,]*)\s*(k)?", re.IGNORECASE
+    # The gap excludes commas: "min Rs 10,000 stipend, apply
+    # to at most 3 a day" must NOT skip the comma and capture
+    # the 3 as the stipend (PR #6 verification found ₹3).
+    r"stipend[^0-9,]{0,20}₹?\s*(\d[\d,]*)\s*(k)?", re.IGNORECASE
 )
 # The number can come first: "min 10k stipend", "15000 stipend".
 _STIPEND_AFTER_RE = re.compile(

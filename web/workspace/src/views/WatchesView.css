@@ -1,0 +1,132 @@
+/* Watches view — view-specific styles only. Tokens come from
+ * tokens.css; shared components (chips, disclosures, activity
+ * lines, empty states) come from app.css. 4px grid, sentence
+ * case, one accent (reserved for the primary button by
+ * tokens.css).
+ * Glass (PR #6): watch rows, events and briefing cards nest
+ * inside glass panes, so they stay solid — one blur layer
+ * per screen region. */
+
+/* Loading placeholder: static muted blocks, no shimmer. */
+.watches-view .skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+/* Helper text under a field: muted, close to its input. */
+.watches-view .field-help {
+  margin: var(--space-1) 0 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--lh-body);
+}
+
+/* The mute length sits with the mute actions, above the
+ * rows — not stranded at the bottom of the section. */
+.watches-view .mute-setting {
+  flex-wrap: wrap;
+  margin-top: 0;
+  margin-bottom: var(--space-3);
+}
+
+.watches-view .mute-setting label {
+  margin-bottom: 0;
+}
+
+/* --- Watch rows: summary-first --- */
+
+/* One truncated line; the full URL is the link target, the
+ * title attribute, and the Details disclosure below. */
+.watches-view .watch-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.watches-view .watch-list .summary-chips {
+  margin-top: var(--space-2);
+}
+
+.watches-view .watch-meta {
+  margin: var(--space-2) 0 0 0;
+}
+
+/* The Details expand is a quiet nested disclosure, not a
+ * card inside the row (same treatment app.css gives
+ * disclosures inside activity lines). */
+.watches-view .watch-details {
+  border: none;
+  background: transparent;
+}
+
+.watches-view .watch-details > summary {
+  padding: var(--space-2) 0 0;
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.watches-view .watch-details .disclosure-body {
+  padding: var(--space-2) 0 0 22px;
+}
+
+.watches-view .watch-details .kv {
+  margin-bottom: 0;
+}
+
+.watches-view .watch-detail-url {
+  overflow-wrap: anywhere;
+}
+
+/* --- Events: activity rows, divided --- */
+
+.watches-view .watch-events-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.watches-view .watch-events-list li {
+  border-bottom: 1px solid var(--border);
+}
+
+.watches-view .watch-events-list li:last-child {
+  border-bottom: none;
+}
+
+.watches-view .watch-events-list .activity-line p {
+  margin: 0;
+}
+
+.watches-view .watch-event-values {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+/* --- Briefing: one line per card, expand for detail --- */
+
+.watches-view .briefing-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.watches-view .briefing-cards .disclosure-body p {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.watches-view .briefing-cards .disclosure-body p:last-child {
+  margin-bottom: 0;
+}

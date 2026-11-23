@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
   api,
   type EgressResult,
@@ -7,7 +7,28 @@ import {
   type RedactionResult,
   type SentEntry,
 } from "../api";
-import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
+import {
+  Disclosure,
+  EmptyState,
+  ErrorBanner,
+  RelativeTime,
+  SectionHeader,
+  Spinner,
+  StatusChip,
+  SummaryChips,
+} from "../components/ui";
+import "./ProofView.css";
+
+/** One metric as a stat row: a big measured number, a short
+ * label, and what it compares to. `within` is null when the
+ * metric wasn't measured — no chip, no invented verdict. */
+type StatRow = {
+  label: string;
+  value: string;
+  compare: string;
+  detail?: string;
+  within: boolean | null;
+};
 
 /** Proof view (plan §5.2, §5.6).
  *
@@ -76,8 +97,69 @@ export function ProofView({ token }: { token: string | null }) {
   }, [token, debouncedQuery]);
 
   const m = metrics?.metrics;
-  const pct = (v: number | null) =>
-    v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
+  /** A fraction as a percent — one decimal when it isn't
+   * whole (72.2%), none when it is (100%). */
+  const pct = (v: number | null | undefined) =>
+    v === null || v === undefined ? "—" : `${Number((v * 100).toFixed(1))}%`;
+
+  /** Targets come from the API (server/api/proof_api.py
+   * returns the full key set even with no run); the fallbacks
+   * are the same values, for a server that omits a key. */
+  const t = metrics?.targets ?? {};
+  const targetGrounding = t.visual_grounding_first_try ?? 0.85;
+  const targetRecall = t.pii_recall ?? 0.95;
+  const targetPrecision = t.pii_precision ?? 0.9;
+  const targetTokens = t.redaction_recoverable_tokens ?? 0;
+  const targetMb = t.resource_mb ?? 300;
+  const targetLatency = t.latency_p50_s ?? 6;
+
+  /** The six SIH metrics as stat rows — only what the API
+   * returned. The grounding detail ("13 of 18 fixtures") is
+   * arithmetic on the returned fraction and fixture count. */
+  const statRows: StatRow[] = m
+    ? [
+        {
+          label: "Grounding (mock planner)",
+          value: pct(m.grounding),
+          compare: `Target ≥${pct(targetGrounding)}`,
+          detail:
+            m.grounding !== null && metrics?.fixtures
+              ? `${Math.round(m.grounding * metrics.fixtures)} of ${metrics.fixtures} fixtures`
+              : undefined,
+          within: m.grounding === null ? null : m.grounding >= targetGrounding,
+        },
+        {
+          label: "PII recall",
+          value: pct(m.pii_recall),
+          compare: `Target ≥${pct(targetRecall)}`,
+          within: m.pii_recall === null ? null : m.pii_recall >= targetRecall,
+        },
+        {
+          label: "PII precision",
+          value: pct(m.pii_precision),
+          compare: `Target ≥${pct(targetPrecision)}`,
+          within: m.pii_precision === null ? null : m.pii_precision >= targetPrecision,
+        },
+        {
+          label: "Recoverable tokens",
+          value: m.redaction_tokens === null ? "—" : String(m.redaction_tokens),
+          compare: `Target ${targetTokens}`,
+          within: m.redaction_tokens === null ? null : m.redaction_tokens <= targetTokens,
+        },
+        {
+          label: "Extension models",
+          value: m.resource_mb === null ? "—" : `${m.resource_mb} MB`,
+          compare: `Target ≤${targetMb} MB`,
+          within: m.resource_mb === null ? null : m.resource_mb <= targetMb,
+        },
+        {
+          label: "Latency p50 (mock planner)",
+          value: m.latency_p50_s === null ? "—" : `${m.latency_p50_s}s`,
+          compare: `Target ≤${targetLatency}s`,
+          within: m.latency_p50_s === null ? null : m.latency_p50_s <= targetLatency,
+        },
+      ]
+    : [];
 
   /** Highlight placeholder tokens ([NAME_1], [EMAIL_1], …) in a
    * redacted payload so the Diff view shows exactly what was
@@ -111,64 +193,46 @@ export function ProofView({ token }: { token: string | null }) {
         </p>
       </div>
       {error && <ErrorBanner error={error} lastOk={lastOk} />}
-      {loading && <p className="muted">Loading proof…</p>}
+      {loading && <Spinner label="Loading proof" />}
 
       <section aria-label="SIH metrics" className="pane">
         <SectionHeader title="SIH metrics" />
         {m ? (
           <div>
-            <table>
-              <caption>
-                Latest benchmark run
-                {metrics?.run_date ? ` — ${metrics.run_date}` : " — no run yet"}
-                {metrics?.fixtures ? `, ${metrics.fixtures} fixtures` : ""}
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Metric</th>
-                  <th scope="col">Measured</th>
-                  <th scope="col">Target</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th scope="row">Grounding (mock planner)</th>
-                  <td className="mono">{pct(m.grounding)}</td>
-                  <td className="mono">≥85%</td>
-                </tr>
-                <tr>
-                  <th scope="row">PII recall</th>
-                  <td className="mono">{pct(m.pii_recall)}</td>
-                  <td className="mono">≥95%</td>
-                </tr>
-                <tr>
-                  <th scope="row">PII precision</th>
-                  <td className="mono">{pct(m.pii_precision)}</td>
-                  <td className="mono">≥90%</td>
-                </tr>
-                <tr>
-                  <th scope="row">Recoverable tokens</th>
-                  <td className="mono">{m.redaction_tokens ?? "—"}</td>
-                  <td className="mono">0</td>
-                </tr>
-                <tr>
-                  <th scope="row">Extension models</th>
-                  <td className="mono">{m.resource_mb ?? "—"} MB</td>
-                  <td className="mono">≤300 MB</td>
-                </tr>
-                <tr>
-                  <th scope="row">Latency p50 (mock planner)</th>
-                  <td className="mono">{m.latency_p50_s ?? "—"}s</td>
-                  <td className="mono">≤6s</td>
-                </tr>
-              </tbody>
-            </table>
-            {metrics?.honesty && <p className="muted">{metrics.honesty}</p>}
+            <p className="muted proof-runline">
+              Latest benchmark run
+              {metrics?.run_date ? ` — ${metrics.run_date}` : " — no run yet"}
+              {metrics?.fixtures ? `, ${metrics.fixtures} fixtures` : ""}
+            </p>
+            <ul className="stat-rows">
+              {statRows.map((row) => (
+                <li key={row.label} className="stat-row">
+                  <div className="stat-main">
+                    <span className="stat-value num">{row.value}</span>
+                    <span className="stat-label">{row.label}</span>
+                  </div>
+                  <div className="stat-compare">
+                    <span className="muted">
+                      {row.compare}
+                      {row.detail ? ` · ${row.detail}` : ""}
+                    </span>
+                    {row.within === null ? (
+                      <span className="muted">Not measured</span>
+                    ) : (
+                      <StatusChip tone={row.within ? "ok" : "bad"}>
+                        {row.within ? "Within target" : "Over target"}
+                      </StatusChip>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {metrics?.honesty && <p className="muted proof-note">{metrics.honesty}</p>}
             {metrics?.worst_page && (
-              <p className="muted">Worst page: {metrics.worst_page}</p>
+              <p className="muted proof-note">Worst page: {metrics.worst_page}</p>
             )}
             {metrics?.worst_pii_fixture && (
-              <p className="muted">Worst PII fixture: {metrics.worst_pii_fixture}</p>
+              <p className="muted proof-note">Worst PII fixture: {metrics.worst_pii_fixture}</p>
             )}
           </div>
         ) : (
@@ -180,21 +244,21 @@ export function ProofView({ token }: { token: string | null }) {
           )
         )}
 
-        <div className="hud" aria-label="Live HUD">
+        <div className="hud proof-hud" aria-label="Live HUD">
           <span>
             Egress hits:{" "}
-            <strong className={egress?.passed ? "success" : "danger"}>
+            <strong className={`num ${egress?.passed ? "success" : "danger"}`}>
               {egress?.hit_count ?? "—"}
             </strong>
           </span>
           <span>
             Redaction:{" "}
-            <strong className={redaction?.passed ? "success" : "danger"}>
+            <strong className={`num ${redaction?.passed ? "success" : "danger"}`}>
               {redaction?.recoverable_tokens ?? "—"} tokens
             </strong>
           </span>
           <span>
-            Latency p50: <strong>{latency?.p50_s ?? "—"}s</strong>
+            Latency p50: <strong className="num">{latency?.p50_s ?? "—"}s</strong>
           </span>
         </div>
       </section>
@@ -243,17 +307,23 @@ export function ProofView({ token }: { token: string | null }) {
             ) : (
               <ul className="sent-list">
                 {sent.map((entry) => (
-                  <li key={entry.id}>
-                    <div className="mono secondary">
-                      {new Date(entry.at * 1000).toLocaleTimeString()} · {entry.endpoint} ·{" "}
-                      {entry.model} · {entry.tokens_est} tokens · {entry.ms}ms
+                  <li key={entry.id} className="sent-entry">
+                    <div className="sent-meta">
+                      <RelativeTime ts={entry.at} />
+                      <span className="mono sent-endpoint">{entry.endpoint}</span>
+                      <span className="mono">{entry.model}</span>
+                      <span className="num">
+                        {entry.tokens_est} tokens · {entry.ms}ms
+                      </span>
                     </div>
                     <pre>{entry.prompt_redacted}</pre>
                     {entry.pii_types.length > 0 && (
-                      <p className="muted">
-                        PII types in the original (redacted before sending):{" "}
-                        {entry.pii_types.join(", ")}
-                      </p>
+                      <div className="sent-pii">
+                        <span className="muted">Redacted before sending:</span>
+                        <SummaryChips
+                          items={entry.pii_types.map((t) => ({ label: "", value: t }))}
+                        />
+                      </div>
                     )}
                   </li>
                 ))}
@@ -276,13 +346,20 @@ export function ProofView({ token }: { token: string | null }) {
             ) : (
               <ul className="sent-list">
                 {sent.map((entry) => (
-                  <li key={entry.id}>
-                    <div className="mono secondary">
-                      {new Date(entry.at * 1000).toLocaleTimeString()} · {entry.endpoint} · {entry.model}
+                  <li key={entry.id} className="sent-entry">
+                    <div className="sent-meta">
+                      <RelativeTime ts={entry.at} />
+                      <span className="mono sent-endpoint">{entry.endpoint}</span>
+                      <span className="mono">{entry.model}</span>
                     </div>
                     <pre>{renderDiff(entry.prompt_redacted)}</pre>
                     {entry.pii_types.length > 0 && (
-                      <p className="muted">Removed: {entry.pii_types.join(", ")}</p>
+                      <div className="sent-pii">
+                        <span className="muted">Removed:</span>
+                        <SummaryChips
+                          items={entry.pii_types.map((t) => ({ label: "", value: t }))}
+                        />
+                      </div>
                     )}
                   </li>
                 ))}
@@ -292,23 +369,40 @@ export function ProofView({ token }: { token: string | null }) {
         )}
 
         {view === "redaction" && (
-          <div>
-            <p>
-              Redaction proof: after redaction, a second PII scan of every
-              payload finds{" "}
-              <strong className={redaction?.passed ? "success" : "danger"}>
-                {redaction?.recoverable_tokens ?? "—"} recoverable tokens
-              </strong>
-              .
-            </p>
-            <p className="muted">
-              The server never stores raw observations — raw PII is redacted
-              on the device before anything reaches the cloud, and the
-              redacted payload is all that is kept. That is why there is no
-              raw text to show here.
-            </p>
-            {redaction?.note && <p className="muted">{redaction.note}</p>}
-            {redaction?.reason && <p className="muted">{redaction.reason}</p>}
+          <div className="redaction-tab">
+            <div className="proof-line">
+              <StatusChip
+                tone={redaction?.passed === true ? "ok" : redaction?.passed === false ? "bad" : "plain"}
+              >
+                {redaction?.passed === true
+                  ? "Redaction passed"
+                  : redaction?.passed === false
+                    ? "Redaction failed"
+                    : "No check yet"}
+              </StatusChip>
+              <SummaryChips
+                items={[
+                  {
+                    label: "Recoverable tokens",
+                    value: String(redaction?.recoverable_tokens ?? "—"),
+                  },
+                  { label: "Calls checked", value: String(egress?.checked ?? "—") },
+                  { label: "Egress hits", value: String(egress?.hit_count ?? "—") },
+                ]}
+              />
+            </div>
+            <Disclosure summary="How this is checked">
+              <p className="muted">
+                After redaction, a second PII scan of every payload finds{" "}
+                {redaction?.recoverable_tokens ?? "—"} recoverable tokens.
+                The server never stores raw observations — raw PII is
+                redacted on the device before anything reaches the cloud,
+                and the redacted payload is all that is kept. That is why
+                there is no raw text to show here.
+              </p>
+              {redaction?.note && <p className="muted">{redaction.note}</p>}
+              {redaction?.reason && <p className="muted">{redaction.reason}</p>}
+            </Disclosure>
             {redaction && Object.keys(redaction.label_based_not_regex).length > 0 && (
               <div>
                 <h3>Caught by label, not by regex</h3>
@@ -319,8 +413,11 @@ export function ProofView({ token }: { token: string | null }) {
                 </p>
                 <ul className="plain-list">
                   {Object.entries(redaction.label_based_not_regex).map(([fixture, types]) => (
-                    <li key={fixture}>
-                      <span className="mono">{fixture}</span> — {types.join(", ")}
+                    <li key={fixture} className="label-fixture">
+                      <span className="mono">{fixture}</span>
+                      <SummaryChips
+                        items={types.map((t) => ({ label: "", value: t }))}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -328,47 +425,61 @@ export function ProofView({ token }: { token: string | null }) {
             )}
             <h3>Egress audit</h3>
             {egress ? (
-              <div>
-                <p>
-                  {egress.passed ? (
-                    <span className="success">
-                      Passed — {egress.checked} outbound calls checked, {egress.hit_count} hits.
-                    </span>
-                  ) : (
-                    <span className="danger">
-                      FAILED — {egress.hit_count} secret{egress.hit_count === 1 ? "" : "s"} left
-                      the device. Stop the run and block the payload.
-                    </span>
-                  )}
+              <div className="egress-block">
+                <p className="egress-line">
+                  <StatusChip tone={egress.passed ? "ok" : "bad"}>
+                    {egress.passed ? "Passed" : "Failed"}
+                  </StatusChip>
+                  <span className={egress.passed ? undefined : "danger"}>
+                    {egress.passed
+                      ? `${egress.checked} outbound calls checked, ${egress.hit_count} hits.`
+                      : `${egress.hit_count} secret${egress.hit_count === 1 ? "" : "s"} left the device. Stop the run and block the payload.`}
+                  </span>
                 </p>
                 <p className="muted">{egress.note}</p>
                 {egress.hits.length > 0 && (
-                  <table>
-                    <caption>Hits carry type, entry and endpoint only — never the value</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Type</th>
-                        <th scope="col">Entry</th>
-                        <th scope="col">Endpoint</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {egress.hits.map((hit, i) => (
-                        <tr key={`${hit.entry_id}-${i}`}>
-                          <td>{hit.type}</td>
-                          <td className="mono">{hit.entry_id}</td>
-                          <td className="mono">{hit.endpoint}</td>
+                  <div className="table-scroll" tabIndex={0} role="region" aria-label="Egress hits">
+                    <table
+                      style={
+                        {
+                          "--label-2": '"Entry: "',
+                          "--label-3": '"Endpoint: "',
+                        } as CSSProperties
+                      }
+                    >
+                      <caption>Hits carry type, entry and endpoint only — never the value</caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">Type</th>
+                          <th scope="col">Entry</th>
+                          <th scope="col">Endpoint</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {egress.hits.map((hit, i) => (
+                          <tr key={`${hit.entry_id}-${i}`}>
+                            <th scope="row">{hit.type}</th>
+                            <td className="mono">{hit.entry_id}</td>
+                            <td className="mono">{hit.endpoint}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
-                <p className="muted">
-                  Patterns checked: {egress.patterns.join(", ") || "—"}
-                </p>
+                <div className="sent-pii">
+                  <span className="muted">Patterns checked:</span>
+                  {egress.patterns.length > 0 ? (
+                    <SummaryChips
+                      items={egress.patterns.map((p) => ({ label: "", value: p }))}
+                    />
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </div>
               </div>
             ) : (
-              <p className="muted">Loading egress audit…</p>
+              <Spinner label="Loading egress audit" />
             )}
           </div>
         )}
@@ -382,30 +493,27 @@ export function ProofView({ token }: { token: string | null }) {
               </EmptyState>
             ) : (
               <div>
-                <p>
-                  Step time p50{" "}
-                  <strong>{latency.p50_s ?? "—"}s</strong>
-                  {latency.mean_s !== null && (
-                    <>
-                      {" "}· mean <strong>{latency.mean_s}s</strong>
-                    </>
+                <div className="proof-line">
+                  <SummaryChips
+                    items={[
+                      { label: "Step time p50", value: `${latency.p50_s ?? "—"}s` },
+                      ...(latency.mean_s !== null
+                        ? [{ label: "Mean", value: `${latency.mean_s}s` }]
+                        : []),
+                      ...(latency.max_s !== null
+                        ? [{ label: "Max", value: `${latency.max_s}s` }]
+                        : []),
+                      ...(latency.target !== null
+                        ? [{ label: "Target", value: `≤${latency.target}s` }]
+                        : []),
+                    ]}
+                  />
+                  {latency.target !== null && latency.p50_within_target !== null && (
+                    <StatusChip tone={latency.p50_within_target ? "ok" : "bad"}>
+                      {latency.p50_within_target ? "Within target" : "Over target"}
+                    </StatusChip>
                   )}
-                  {latency.max_s !== null && (
-                    <>
-                      {" "}· max <strong>{latency.max_s}s</strong>
-                    </>
-                  )}
-                  {latency.target !== null && (
-                    <>
-                      {" "}· target ≤{latency.target}s —{" "}
-                      {latency.p50_within_target ? (
-                        <span className="success">within target</span>
-                      ) : (
-                        <span className="danger">over target</span>
-                      )}
-                    </>
-                  )}
-                </p>
+                </div>
                 {latency.planner && <p className="muted">Planner: {latency.planner}</p>}
                 {latency.note && <p className="muted">{latency.note}</p>}
                 <h3>Per fixture (slowest first)</h3>
@@ -414,7 +522,7 @@ export function ProofView({ token }: { token: string | null }) {
                     <li key={name}>
                       <div className="waterfall-row">
                         <span className="mono">{name}</span>
-                        <span className="mono">
+                        <span className="mono num">
                           {f.elapsed_s}s · {f.steps} steps · {f.verified} verified
                         </span>
                       </div>

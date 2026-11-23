@@ -10,6 +10,8 @@ import { VaultView } from "./views/VaultView";
 import { MemoryView } from "./views/MemoryView";
 import { ProofView } from "./views/ProofView";
 import { AuditView } from "./views/AuditView";
+import { MotionBackground } from "./components/MotionBackground";
+import { EclipseHero } from "./components/EclipseHero";
 import "./tokens.css";
 import "./app.css";
 
@@ -29,17 +31,80 @@ type ViewId =
   | "proof"
   | "audit";
 
-const VIEWS: { id: ViewId; label: string; short: string }[] = [
-  { id: "agent", label: "Agent", short: "Ag" },
-  { id: "missions", label: "Missions", short: "Mi" },
-  { id: "jobs", label: "Jobs", short: "Jo" },
-  { id: "mail", label: "Mail", short: "Ma" },
-  { id: "watches", label: "Watches & Briefing", short: "Wa" },
-  { id: "connectors", label: "Connectors", short: "Co" },
-  { id: "vault", label: "Vault", short: "Va" },
-  { id: "memory", label: "Memory & RAG", short: "Me" },
-  { id: "proof", label: "Proof", short: "Pr" },
-  { id: "audit", label: "Audit & Trace", short: "Au" },
+/** Nav icons (PR #6 Worker 11): one small geometric mark
+ * per view, 18px, 1.5 stroke, currentColor — the same
+ * stroke and size across all ten, so the labels align in
+ * one column. */
+function NavIcon({ d, extra }: { d: string; extra?: ReactNode }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
+      {extra}
+    </svg>
+  );
+}
+
+const VIEWS: { id: ViewId; label: string; icon: ReactNode }[] = [
+  { id: "agent", label: "Agent", icon: <NavIcon d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /> },
+  {
+    id: "missions",
+    label: "Missions",
+    icon: (
+      <NavIcon
+        d="M12 12h.01"
+        extra={
+          <>
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="5" />
+            <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+          </>
+        }
+      />
+    ),
+  },
+  {
+    id: "jobs",
+    label: "Jobs",
+    icon: <NavIcon d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18" extra={<rect x="3" y="7" width="18" height="13" rx="2" />} />,
+  },
+  {
+    id: "mail",
+    label: "Mail",
+    icon: <NavIcon d="m3 7 9 6 9-6" extra={<rect x="3" y="5" width="18" height="14" rx="2" />} />,
+  },
+  {
+    id: "watches",
+    label: "Watches & Briefing",
+    icon: <NavIcon d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z" extra={<circle cx="12" cy="12" r="3" />} />,
+  },
+  { id: "connectors", label: "Connectors", icon: <NavIcon d="M9 7V3M15 7V3M7 7h10v4a5 5 0 0 1-10 0V7ZM12 16v5" /> },
+  { id: "vault", label: "Vault", icon: <NavIcon d="m11 13 8-8M17 5l3 3" extra={<circle cx="8" cy="16" r="4" />} /> },
+  {
+    id: "memory",
+    label: "Memory & RAG",
+    icon: <NavIcon d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z" />,
+  },
+  {
+    id: "proof",
+    label: "Proof",
+    icon: <NavIcon d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3ZM9 12l2 2 4-4" />,
+  },
+  {
+    id: "audit",
+    label: "Audit & Trace",
+    icon: (
+      <NavIcon
+        d="M8 6h13M8 12h13M8 18h13"
+        extra={
+          <>
+            <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
+            <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
+            <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
+          </>
+        }
+      />
+    ),
+  },
 ];
 
 /** Error boundary (review B1): one view crashing must never
@@ -73,35 +138,44 @@ class ViewErrorBoundary extends Component<
 
 function NavList({
   view,
-  collapsed,
+  approvalCount,
   onNavigate,
 }: {
   view: ViewId;
-  collapsed: boolean;
+  approvalCount: number;
   onNavigate: (v: ViewId) => void;
 }) {
   return (
     <ul className="nav-list">
-      {VIEWS.map((v) => (
-        <li key={v.id}>
-          <button
-            type="button"
-            className={v.id === view ? "nav-current" : ""}
-            aria-current={v.id === view ? "page" : undefined}
-            aria-label={v.label}
-            title={v.label}
-            onClick={() => onNavigate(v.id)}
-          >
-            {collapsed ? (
-              <span className="nav-short" aria-hidden="true">
-                {v.short}
+      {VIEWS.map((v) => {
+        const badge = v.id === "agent" && approvalCount > 0 ? approvalCount : 0;
+        return (
+          <li key={v.id}>
+            <button
+              type="button"
+              className={v.id === view ? "nav-current" : ""}
+              aria-current={v.id === view ? "page" : undefined}
+              aria-label={
+                badge > 0
+                  ? `${v.label}, ${badge} waiting for approval`
+                  : v.label
+              }
+              title={v.label}
+              onClick={() => onNavigate(v.id)}
+            >
+              <span className="nav-icon" aria-hidden="true">
+                {v.icon}
               </span>
-            ) : (
-              v.label
-            )}
-          </button>
-        </li>
-      ))}
+              <span className="nav-label">{v.label}</span>
+              {badge > 0 && (
+                <span className="nav-badge" aria-hidden="true">
+                  {badge}
+                </span>
+              )}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -119,6 +193,7 @@ export default function App() {
   const [scenePaused, setScenePaused] = useState(false);
   const [serverUp, setServerUp] = useState<boolean | null>(null);
   const [quota, setQuota] = useState<QuotaModel[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState(0);
   const drawerRef = useRef<HTMLDialogElement | null>(null);
 
   const saveToken = () => {
@@ -135,6 +210,7 @@ export default function App() {
     setTokenState(null);
     setQuota([]);
     setServerUp(null);
+    setPendingApprovals(0);
   };
 
   // Sprint 9 fix (review M18): a 401 anywhere returns the user
@@ -154,19 +230,30 @@ export default function App() {
   // Sprint 9 fix (review M13): the top bar says "Connected" only
   // when the server answers /health — token presence alone is
   // not a connection.
+  //
+  // PR #6: the same 30s poll also fetches the ask_user task
+  // list (server-side status filter — one cheap query) for
+  // the nav approval badge. Real data, never a fake count; on
+  // error the last count stands rather than flashing to 0.
   useEffect(() => {
     if (!token) {
       setServerUp(null);
       setQuota([]);
+      setPendingApprovals(0);
       return;
     }
     let alive = true;
     const check = async () => {
       try {
-        const [health, q] = await Promise.all([api.health(), api.quota()]);
+        const [health, q, waiting] = await Promise.all([
+          api.health(),
+          api.quota(),
+          api.listTasks("ask_user"),
+        ]);
         if (!alive) return;
         setServerUp(health.status === "ok");
         setQuota(q.models);
+        setPendingApprovals(waiting.tasks.length);
       } catch {
         if (alive) setServerUp(false);
       }
@@ -207,8 +294,18 @@ export default function App() {
 
   const currentLabel = VIEWS.find((v) => v.id === view)?.label ?? "Agent";
 
+  // Quota totals for the compact HUD summary ("Quota
+  // 12/1,000"); the per-model detail lives behind a click.
+  const quotaUsed = quota.reduce((sum, m) => sum + m.used_today, 0);
+  const quotaLimit = quota.reduce((sum, m) => sum + m.limit, 0);
+  const quotaHot = quotaLimit > 0 && quotaUsed / quotaLimit >= 0.8;
+
   return (
     <div className="app">
+      {/* PR #6 motion: fixed drifting-gradient layer behind all
+          content (aria-hidden, pointer-events none). The shell,
+          token gate and statusbar sit above it via z-index. */}
+      <MotionBackground />
       <a href="#main" className="skip-link">
         Skip to main content
       </a>
@@ -233,17 +330,32 @@ export default function App() {
               {serverUp ? "● Connected" : serverUp === false ? "● Server unreachable" : "● Checking…"}
             </span>
             {quota.length > 0 && (
-              <span className="quota-hud" aria-label="Quota used today">
-                {quota.map((m) => (
-                  <span
-                    key={m.name}
-                    className={m.limit > 0 && m.used_today / m.limit >= 0.8 ? "warning" : "muted"}
-                    title={`${m.name}: ${m.used_today} of ${m.limit} calls today`}
-                  >
-                    {m.name} {m.used_today}/{m.limit}
-                  </span>
-                ))}
-              </span>
+              <details className="quota-details">
+                <summary
+                  className={`quota-summary ${quotaHot ? "warning" : ""}`}
+                  aria-label={`Quota used today: ${quotaUsed} of ${quotaLimit} calls. Expand for per-model detail.`}
+                >
+                  Quota {quotaUsed.toLocaleString()}
+                  {quotaLimit > 0 ? `/${quotaLimit.toLocaleString()}` : ""}
+                </summary>
+                <div className="quota-panel">
+                  {quota.map((m) => (
+                    <div key={m.name} className="quota-row">
+                      <span>{m.name}</span>
+                      <span
+                        className={
+                          m.limit > 0 && m.used_today / m.limit >= 0.8
+                            ? "warning"
+                            : "muted"
+                        }
+                        title={`${m.name}: ${m.used_today} of ${m.limit} calls today`}
+                      >
+                        {m.used_today}/{m.limit}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -263,6 +375,10 @@ export default function App() {
 
       {!token ? (
         <main id="main" className="token-gate-wrap">
+          {/* PR #6: the first screen gets the eclipse hero, so
+              the gate reads as the product's front door, not a
+              bare login card. Same hero as the chat empty state. */}
+          <EclipseHero />
           <div className="token-gate">
             <h2>Connect to the local server</h2>
             {tokenRejected && (
@@ -315,7 +431,7 @@ export default function App() {
             aria-label="Workspace"
             className={`sidebar ${navCollapsed ? "sidebar-collapsed" : ""}`}
           >
-            <NavList view={view} collapsed={navCollapsed} onNavigate={navigate} />
+            <NavList view={view} approvalCount={pendingApprovals} onNavigate={navigate} />
             <button
               type="button"
               className="collapse-button"
@@ -323,7 +439,20 @@ export default function App() {
               aria-label={navCollapsed ? "Expand navigation" : "Collapse navigation"}
               aria-pressed={navCollapsed}
             >
-              {navCollapsed ? "»" : "« Collapse"}
+              {navCollapsed ? (
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m13 17 5-5-5-5" />
+                  <path d="m6 17 5-5-5-5" />
+                </svg>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m11 17-5-5 5-5" />
+                    <path d="m18 17-5-5 5-5" />
+                  </svg>
+                  <span>Collapse</span>
+                </>
+              )}
             </button>
           </nav>
 
@@ -389,7 +518,7 @@ export default function App() {
             ✕
           </button>
         </div>
-        <NavList view={view} collapsed={false} onNavigate={navigate} />
+        <NavList view={view} approvalCount={pendingApprovals} onNavigate={navigate} />
       </dialog>
 
       <footer className="statusbar">

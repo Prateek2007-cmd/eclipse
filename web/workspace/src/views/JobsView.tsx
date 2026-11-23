@@ -1,8 +1,21 @@
 import { useState } from "react";
+import "./JobsView.css";
 import { api, isHttpError, type MatchResponse, type Profile, type RoleInput } from "../api";
 import { usePoll, useTaskList } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
+import {
+  Disclosure,
+  EmptyState,
+  ErrorBanner,
+  RelativeTime,
+  SectionHeader,
+  ShowMore,
+  Spinner,
+  StatusChip,
+  SummaryChips,
+  humanStatus,
+  statusTone,
+} from "../components/ui";
 
 const EMPTY_ROLE: RoleInput = {
   id: "",
@@ -19,6 +32,9 @@ const EMPTY_ROLE: RoleInput = {
   min_cgpa: null,
   requires_experience: false,
 };
+
+/** How many shortlist cards show before "Show more". */
+const SHORTLIST_PAGE_SIZE = 5;
 
 /** Jobs view: the resume profile (parsed locally, nothing
  * leaves the device), role matching against it, the applied
@@ -37,10 +53,13 @@ export function JobsView({ token }: { token: string | null }) {
   const [staged, setStaged] = useState<RoleInput[]>([]);
   const [match, setMatch] = useState<MatchResponse | null>(null);
   const [matching, setMatching] = useState(false);
+  const [shortlistShown, setShortlistShown] = useState(SHORTLIST_PAGE_SIZE);
 
   const [appliedRoleId, setAppliedRoleId] = useState("");
   const [appliedUrl, setAppliedUrl] = useState("");
   const [appliedResult, setAppliedResult] = useState<boolean | null>(null);
+  const [appliedCheckedFor, setAppliedCheckedFor] = useState("");
+  const [appliedCheckedAt, setAppliedCheckedAt] = useState<number | null>(null);
   const [checkingApplied, setCheckingApplied] = useState(false);
 
   const { tasks } = useTaskList(token);
@@ -52,7 +71,16 @@ export function JobsView({ token }: { token: string | null }) {
   const [receiptConfirmation, setReceiptConfirmation] = useState("");
   const [receiptStatus, setReceiptStatus] = useState<"submitted" | "failed">("submitted");
   const [confirmReceipt, setConfirmReceipt] = useState(false);
-  const [receiptSaved, setReceiptSaved] = useState<string | null>(null);
+  // The receipt just recorded, kept for its confirmation row —
+  // the form fields are cleared on save, so the row needs its
+  // own copy of the title/company/status.
+  const [savedReceipt, setSavedReceipt] = useState<{
+    id: string;
+    title: string;
+    company: string;
+    status: "submitted" | "failed";
+    at: number;
+  } | null>(null);
   const [savingReceipt, setSavingReceipt] = useState(false);
 
   usePoll(
@@ -120,6 +148,7 @@ export function JobsView({ token }: { token: string | null }) {
     try {
       const data = await api.matchRoles(staged);
       setMatch(data);
+      setShortlistShown(SHORTLIST_PAGE_SIZE);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -137,6 +166,8 @@ export function JobsView({ token }: { token: string | null }) {
     try {
       const data = await api.checkApplied(appliedRoleId.trim(), appliedUrl.trim());
       setAppliedResult(data.already_applied);
+      setAppliedCheckedFor(appliedRoleId.trim() || appliedUrl.trim());
+      setAppliedCheckedAt(Math.floor(Date.now() / 1000));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -148,7 +179,7 @@ export function JobsView({ token }: { token: string | null }) {
     setConfirmReceipt(false);
     setSavingReceipt(true);
     setError(null);
-    setReceiptSaved(null);
+    setSavedReceipt(null);
     try {
       const data = await api.addReceipt(receiptTaskId, {
         role_id: receiptRoleId.trim(),
@@ -158,7 +189,13 @@ export function JobsView({ token }: { token: string | null }) {
         confirmation: receiptConfirmation.trim(),
         status: receiptStatus,
       });
-      setReceiptSaved(data.receipt_id);
+      setSavedReceipt({
+        id: data.receipt_id,
+        title: receiptTitle.trim(),
+        company: receiptCompany.trim(),
+        status: receiptStatus,
+        at: Math.floor(Date.now() / 1000),
+      });
       setReceiptRoleId("");
       setReceiptTitle("");
       setReceiptCompany("");
@@ -174,6 +211,40 @@ export function JobsView({ token }: { token: string | null }) {
   const setRole = <K extends keyof RoleInput>(key: K, value: RoleInput[K]) =>
     setRoleDraft((prev) => ({ ...prev, [key]: value }));
 
+  // Best-first: the server usually returns the shortlist
+  // sorted, but the view does not trust the order.
+  const sortedShortlist = match
+    ? [...match.shortlist].sort((a, b) => b.score - a.score)
+    : [];
+
+  // The profile, summary-first: name, degree/year/CGPA/email
+  // as one line, skills + locations + stipend floor as chips.
+  const profileFacts = profile
+    ? [
+        profile.degree,
+        profile.year !== null ? `Year ${profile.year}` : null,
+        profile.cgpa !== null ? `CGPA ${profile.cgpa}` : null,
+        profile.email,
+      ].filter((part): part is string => part !== null && part !== "")
+    : [];
+  const profileChips: { label: string; value: string }[] = profile
+    ? [
+        ...profile.skills.map((skill) => ({ label: "", value: skill })),
+        ...profile.locations.map((location) => ({
+          label: "Location",
+          value: location,
+        })),
+        ...(profile.stipend_min !== null
+          ? [
+              {
+                label: "Stipend floor",
+                value: `₹${profile.stipend_min}/month`,
+              },
+            ]
+          : []),
+      ]
+    : [];
+
   return (
     <div className="view jobs-view">
       <div className="view-head">
@@ -188,28 +259,17 @@ export function JobsView({ token }: { token: string | null }) {
       <section aria-label="Profile" className="pane">
         <SectionHeader title="Profile" />
         {profile ? (
-          <div>
-            <dl className="kv">
-              <dt>Name</dt>
-              <dd>{profile.name ?? "—"}</dd>
-              <dt>Email</dt>
-              <dd>{profile.email ?? "—"}</dd>
-              <dt>Degree</dt>
-              <dd>{profile.degree ?? "—"}</dd>
-              <dt>Year</dt>
-              <dd>{profile.year ?? "—"}</dd>
-              <dt>CGPA</dt>
-              <dd>{profile.cgpa ?? "—"}</dd>
-              <dt>Skills</dt>
-              <dd>{profile.skills.length ? profile.skills.join(", ") : "—"}</dd>
-              <dt>Locations</dt>
-              <dd>{profile.locations.length ? profile.locations.join(", ") : "—"}</dd>
-              <dt>Stipend floor</dt>
-              <dd>{profile.stipend_min !== null ? `₹${profile.stipend_min}` : "—"}</dd>
-            </dl>
-            <p className="muted">
-              Paste the resume again below to replace this profile.
-            </p>
+          <div className="profile-summary">
+            <p className="profile-name">{profile.name ?? "Unnamed profile"}</p>
+            {profileFacts.length > 0 && (
+              <p className="muted profile-facts">{profileFacts.join(" · ")}</p>
+            )}
+            <SummaryChips items={profileChips} />
+            {profileChips.length === 0 && (
+              <p className="muted">
+                No skills, locations, or stipend floor found in this resume.
+              </p>
+            )}
           </div>
         ) : profileMissing ? (
           <EmptyState>
@@ -218,26 +278,36 @@ export function JobsView({ token }: { token: string | null }) {
             floor.
           </EmptyState>
         ) : (
-          <p className="muted">Loading profile…</p>
+          <div className="skeleton-stack" aria-hidden="true">
+            <div className="skeleton skeleton-title" style={{ width: "40%" }} />
+            <div className="skeleton skeleton-line" style={{ width: "70%" }} />
+            <div className="skeleton skeleton-line" style={{ width: "55%" }} />
+          </div>
         )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void saveProfile();
-          }}
+        <Disclosure
+          summary={profile ? "Edit profile" : "Add your resume"}
+          defaultOpen={profileMissing}
+          className="profile-edit"
         >
-          <label htmlFor="resume-text">Resume text</label>
-          <textarea
-            id="resume-text"
-            value={resumeText}
-            onChange={(e) => setResumeText(e.target.value)}
-            placeholder="Paste the resume as plain text…"
-            rows={6}
-          />
-          <button type="submit" className="primary" disabled={savingProfile || resumeText.trim().length < 10}>
-            {savingProfile ? "Parsing…" : profile ? "Replace profile" : "Parse resume"}
-          </button>
-        </form>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveProfile();
+            }}
+          >
+            <label htmlFor="resume-text">Resume text</label>
+            <textarea
+              id="resume-text"
+              value={resumeText}
+              onChange={(e) => setResumeText(e.target.value)}
+              placeholder="Paste the resume as plain text…"
+              rows={6}
+            />
+            <button type="submit" className="primary" disabled={savingProfile || resumeText.trim().length < 10}>
+              {savingProfile ? "Parsing…" : profile ? "Replace profile" : "Parse resume"}
+            </button>
+          </form>
+        </Disclosure>
       </section>
 
       <section aria-label="Match roles" className="pane">
@@ -375,14 +445,17 @@ export function JobsView({ token }: { token: string | null }) {
         </form>
 
         {staged.length > 0 && (
-          <div>
+          <div className="staged-block">
             <h3>Staged roles ({staged.length})</h3>
-            <ul className="plain-list">
+            <ul className="staged-list">
               {staged.map((r) => (
-                <li key={r.id}>
-                  <strong>{r.title}</strong>
-                  {r.company ? ` · ${r.company}` : ""} ·{" "}
-                  <span className="mono muted">{r.id}</span>{" "}
+                <li key={r.id} className="staged-row">
+                  <span className="staged-role">
+                    <strong>{r.title}</strong>
+                    {r.company ? <span className="muted"> · {r.company}</span> : ""}
+                    {" · "}
+                    <span className="mono muted">{r.id}</span>
+                  </span>
                   <button
                     type="button"
                     onClick={() => setStaged((prev) => prev.filter((x) => x.id !== r.id))}
@@ -398,49 +471,105 @@ export function JobsView({ token }: { token: string | null }) {
               onClick={() => void runMatch()}
               disabled={matching || !profile}
             >
-              {matching ? "Matching…" : "Run match"}
+              {matching ? <Spinner label="Matching" /> : "Run match"}
             </button>
           </div>
         )}
 
-        {match && (
-          <div>
+        {match ? (
+          <div className="match-results">
             <h3>Shortlist ({match.shortlist.length} of {match.count})</h3>
-            {match.shortlist.length === 0 ? (
-              <p className="muted">Nothing fits. See the excluded roles below for why.</p>
+            {sortedShortlist.length === 0 ? (
+              <EmptyState>
+                Nothing fits. See the excluded roles below for why.
+              </EmptyState>
             ) : (
-              <ul className="plain-list">
-                {match.shortlist.map((m) => (
-                  <li key={m.role_id}>
-                    <strong>{m.role_id}</strong> · score{" "}
-                    <span className="mono">{m.score}</span>
-                    {m.deadline ? ` · deadline ${m.deadline}` : ""}
-                    {m.stipend !== null ? ` · ₹${m.stipend}` : ""}
-                    {m.location ? ` · ${m.location}` : ""}
-                    {m.reasons.length > 0 && (
-                      <p className="secondary">{m.reasons.join(" · ")}</p>
-                    )}
-                    {m.warnings.length > 0 && (
-                      <p className="warning">{m.warnings.join(" · ")}</p>
-                    )}
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="match-list">
+                  {sortedShortlist.slice(0, shortlistShown).map((m) => {
+                    // The match response carries only the role id —
+                    // the title/company come from the staged role
+                    // that was matched.
+                    const stagedRole = staged.find((r) => r.id === m.role_id);
+                    return (
+                      <li key={m.role_id} className="match-card">
+                        <div className="match-score" aria-label={`Score ${m.score}`}>
+                          <span className="num">{m.score}</span>
+                          <span className="match-score-label">score</span>
+                        </div>
+                        <div className="match-body">
+                          <p className="match-title">
+                            {stagedRole?.title ?? m.role_id}
+                            {stagedRole?.company ? (
+                              <span className="muted"> · {stagedRole.company}</span>
+                            ) : null}
+                          </p>
+                          <SummaryChips
+                            items={[
+                              ...(m.stipend !== null
+                                ? [{ label: "", value: `₹${m.stipend}/month` }]
+                                : []),
+                              ...(m.location
+                                ? [{ label: "", value: m.location }]
+                                : []),
+                              ...(m.deadline
+                                ? [{ label: "Deadline", value: m.deadline }]
+                                : []),
+                            ]}
+                          />
+                          {m.reasons.length > 0 && (
+                            <ul className="match-reasons">
+                              {m.reasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          )}
+                          {m.warnings.length > 0 && (
+                            <p className="warning match-warnings">
+                              {m.warnings.join(" · ")}
+                            </p>
+                          )}
+                          <p className="muted mono match-id">{m.role_id}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <ShowMore
+                  total={sortedShortlist.length}
+                  shown={shortlistShown}
+                  onShowMore={() => setShortlistShown(sortedShortlist.length)}
+                  label="roles"
+                />
+              </>
             )}
             {match.excluded.length > 0 && (
-              <div>
-                <h3>Excluded ({match.excluded.length})</h3>
+              <Disclosure
+                summary={`Excluded (${match.excluded.length})`}
+                className="match-excluded"
+              >
                 <ul className="plain-list">
-                  {match.excluded.map((m) => (
-                    <li key={m.role_id}>
-                      <strong>{m.role_id}</strong> —{" "}
-                      <span className="muted">{m.missing.join("; ") || "does not fit"}</span>
-                    </li>
-                  ))}
+                  {match.excluded.map((m) => {
+                    const stagedRole = staged.find((r) => r.id === m.role_id);
+                    return (
+                      <li key={m.role_id}>
+                        <strong>{stagedRole?.title ?? m.role_id}</strong> —{" "}
+                        <span className="muted">
+                          {m.missing.join("; ") || "does not fit"}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
-              </div>
+              </Disclosure>
             )}
           </div>
+        ) : (
+          <EmptyState>
+            {staged.length > 0
+              ? "No roles matched yet — run a match above."
+              : "No roles matched yet — add a role above, then run a match."}
+          </EmptyState>
         )}
       </section>
 
@@ -473,11 +602,20 @@ export function JobsView({ token }: { token: string | null }) {
           </button>
         </form>
         {appliedResult !== null && (
-          <p role="status" className={appliedResult ? "warning" : "success"}>
-            {appliedResult
-              ? "Already applied — a receipt is on file."
-              : "Not applied yet — no receipt on file."}
-          </p>
+          <div role="status" className="applied-result">
+            <StatusChip tone={appliedResult ? "warn" : "ok"}>
+              {appliedResult ? "Already applied" : "Not applied yet"}
+            </StatusChip>
+            <span>
+              {appliedResult
+                ? "A receipt is on file for this role."
+                : "No receipt on file for this role."}
+            </span>
+            <span className="muted mono">{appliedCheckedFor}</span>
+            <span className="muted">
+              Checked <RelativeTime ts={appliedCheckedAt} />
+            </span>
+          </div>
         )}
       </section>
 
@@ -568,10 +706,20 @@ export function JobsView({ token }: { token: string | null }) {
             <button type="submit" className="primary" disabled={savingReceipt || !receiptTaskId}>
               {savingReceipt ? "Recording…" : "Record receipt"}
             </button>
-            {receiptSaved && (
-              <p role="status" className="success">
-                Receipt recorded ({receiptSaved}).
-              </p>
+            {savedReceipt && (
+              <div role="status" className="receipt-row">
+                <StatusChip tone={statusTone(savedReceipt.status)}>
+                  {humanStatus(savedReceipt.status)}
+                </StatusChip>
+                <span>
+                  Receipt recorded — <strong>{savedReceipt.title}</strong>
+                  {savedReceipt.company ? ` · ${savedReceipt.company}` : ""}
+                </span>
+                <span className="muted">
+                  <RelativeTime ts={savedReceipt.at} />
+                </span>
+                <span className="muted mono">{savedReceipt.id}</span>
+              </div>
             )}
           </form>
         )}

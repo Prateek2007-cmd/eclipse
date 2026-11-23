@@ -98,6 +98,15 @@ CREATE INDEX IF NOT EXISTS idx_mission_activity_mission
   ON mission_activity(mission_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_mission_activity_kind_day
   ON mission_activity(mission_id, kind, created_at);
+-- PR #6: chat — the Agent view's message thread. One row per
+-- message, user and agent alike. Timestamps are integer SECONDS
+-- (never ms). source is "planner" or "rules" on agent rows, NULL
+-- on user rows; task_id links the reply that created a task.
+CREATE TABLE IF NOT EXISTS chat_messages(
+  id TEXT PRIMARY KEY, role TEXT, text TEXT, kind TEXT,
+  task_id TEXT NULL, source TEXT NULL, created_at INTEGER);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_created
+  ON chat_messages(created_at);
 """
 
 # Verified free top 5 (Sprint 0 probe, 2026-11-21). gpt-oss-120b is
@@ -360,6 +369,27 @@ def migrate(db_path: Path | None = None) -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mission_activity_kind_day"
                 " ON mission_activity(mission_id, kind, created_at)")
+            # PR #6: chat_messages — the Agent view's thread. The
+            # SCHEMA string declares it for fresh databases;
+            # existing ones get it here. The source column guard
+            # covers a database migrated by an earlier PR #6 cut
+            # that created the table without it.
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "chat_messages" not in tables:
+                conn.execute(
+                    "CREATE TABLE chat_messages("
+                    " id TEXT PRIMARY KEY, role TEXT, text TEXT, kind TEXT,"
+                    " task_id TEXT NULL, source TEXT NULL, created_at INTEGER)"
+                )
+            chat_cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(chat_messages)")}
+            if "source" not in chat_cols:
+                conn.execute(
+                    "ALTER TABLE chat_messages ADD COLUMN source TEXT NULL")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_messages_created"
+                " ON chat_messages(created_at)")
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(

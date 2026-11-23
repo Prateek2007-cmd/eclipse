@@ -67,6 +67,35 @@ export type TaskDetail = {
   receipts: Receipt[];
 };
 
+/** ---- chat (PR #6) ---- */
+
+/** One chat message, as GET /chat/history returns it (oldest
+ * first). `source` is only present when the server labels
+ * the reply — history rows may omit it, so it is optional
+ * and the UI shows no source note rather than guessing one.
+ * created_at is unix seconds. */
+export type ChatMessage = {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  kind: "chat" | "task_created";
+  task_id: string | null;
+  created_at: number;
+  source?: "planner" | "rules";
+};
+
+/** POST /chat/message: the agent's reply. kind "chat" is a
+ * plain reply — a greeting never creates a task; kind
+ * "task_created" anchors a task card under the reply via
+ * task_id. source names the path that answered. */
+export type ChatReply = {
+  message_id: string;
+  reply_text: string;
+  kind: "chat" | "task_created";
+  task_id: string | null;
+  source: "planner" | "rules";
+};
+
 /** A pending human-gate approval, as the server records it
  * (server/core/db.py pending_approvals). The server issues the
  * id when the step reaches the gate — the client must approve
@@ -833,6 +862,20 @@ export const api = {
     call<{ task_id: string; status: string }>(`/tasks/${id}/resume`, {
       method: "POST",
     }),
+
+  // ---- chat ----
+  /** Send a chat message. The ONLY way the Agent view starts
+   * work — a greeting returns kind "chat" with no task; a
+   * real request returns kind "task_created" with the task
+   * id. The view never calls createTask. */
+  chatMessage: (text: string) =>
+    call<ChatReply>("/chat/message", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  /** Chat history, oldest first. Limit defaults to 50. */
+  chatHistory: (limit = 50) =>
+    call<{ messages: ChatMessage[] }>(`/chat/history?limit=${limit}`),
 
   // ---- jobs ----
   setProfile: (resumeText: string) =>

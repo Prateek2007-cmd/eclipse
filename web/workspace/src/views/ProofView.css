@@ -1,0 +1,177 @@
+/* Proof view: metrics as stat rows (big number, short label,
+ * what it compares to), egress/redaction as scannable lines,
+ * HUD numbers quiet and tabular. 4px grid; tokens only.
+ * Glass (PR #6): sent entries nest inside glass panes, so
+ * they stay solid — one blur layer per screen region. The
+ * payload blocks stay dark insets, never glass. */
+
+.proof-runline {
+  margin: 0 0 var(--space-3) 0;
+  font-size: var(--text-sm);
+}
+
+/* Stat rows: one metric per row, the number leading. */
+.stat-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+
+.stat-row:last-child {
+  border-bottom: none;
+}
+
+.stat-main {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.stat-value {
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  letter-spacing: -0.01em;
+}
+
+.stat-label {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.stat-compare {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.proof-note {
+  margin: var(--space-2) 0 0;
+  text-wrap: pretty;
+}
+
+/* HUD: quiet numbers, tabular figures, no colour except the
+ * pass/fail tone on the values themselves. */
+.proof-hud {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.proof-hud strong {
+  font-weight: 600;
+}
+
+/* Sent / Diff entries: meta line first, payload below, PII
+ * types as chips. */
+.sent-entry {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  box-shadow: var(--shadow-card);
+}
+
+.sent-meta {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.sent-endpoint {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.sent-entry pre {
+  /* Redacted prompt / diff payloads: the same dark inset as
+   * RawData — a near-black code block on the light page. */
+  background: var(--ink-bg);
+  color: var(--ink-text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+}
+
+.sent-pii {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+}
+
+/* Redaction tab: one scannable line up top, detail behind
+ * the expand, egress below. */
+.redaction-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.redaction-tab h3 {
+  margin-bottom: 0;
+}
+
+.redaction-tab p {
+  margin: 0;
+}
+
+.proof-line {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.label-fixture {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.egress-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.egress-line {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  flex-wrap: wrap;
+}

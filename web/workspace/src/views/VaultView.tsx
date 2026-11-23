@@ -1,8 +1,64 @@
 import { useState } from "react";
-import { api, type VaultStatus } from "../api";
-import { fmtDateTime, usePoll, useTaskList } from "../hooks";
+import { api, type VaultGrant, type VaultStatus } from "../api";
+import { fmtDateTime, usePoll, useRelativeNow, useTaskList } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader, StatusChip } from "../components/ui";
+import {
+  Disclosure,
+  EmptyState,
+  ErrorBanner,
+  SectionHeader,
+  Spinner,
+  StatusChip,
+  SummaryChips,
+} from "../components/ui";
+import "./VaultView.css";
+
+/** A future unix-seconds timestamp as "in 8 min" / "in 2 hr".
+ * fmtRelative is past-facing ("2 min ago") and clamps future
+ * timestamps to "just now", so grant expiry needs its own
+ * formatter. Past timestamps read "expired". */
+function fmtExpiresIn(ts: number, nowMs: number): string {
+  const diffS = Math.floor(ts - nowMs / 1000);
+  if (diffS <= 0) return "expired";
+  if (diffS < 90) return "in under a minute";
+  const mins = Math.floor(diffS / 60);
+  if (mins < 60) return mins === 1 ? "in 1 min" : `in ${mins} min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours === 1 ? "in 1 hr" : `in ${hours} hr`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "in 1 day" : `in ${days} days`;
+}
+
+/** Shorten a long id for the row; the full value stays in the
+ * title attribute. */
+function shortId(id: string): string {
+  return id.length > 16 ? `${id.slice(0, 12)}…` : id;
+}
+
+/** One live grant: id, task, expiry and — last4 only — card.
+ * Never a secret value. */
+function GrantRow({ grant, now }: { grant: VaultGrant; now: number }) {
+  return (
+    <li className="grant-row">
+      <div className="grant-main">
+        <span className="mono grant-id" title={grant.grant_id}>
+          {shortId(grant.grant_id)}
+        </span>
+        <span className="grant-expiry" title={fmtDateTime(grant.expires_at)}>
+          Expires {fmtExpiresIn(grant.expires_at, now)}
+        </span>
+      </div>
+      <SummaryChips
+        items={[
+          { label: "Task", value: shortId(grant.task_id) },
+          ...(grant.has_card
+            ? [{ label: "Card", value: `ends ${grant.card_last4 ?? "—"}` }]
+            : []),
+        ]}
+      />
+    </li>
+  );
+}
 
 /** Vault view: status, create, unlock/lock, fill checks,
  * grants, and storing opted-in login passwords.
@@ -19,6 +75,7 @@ export function VaultView({ token }: { token: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const now = useRelativeNow();
 
   const { tasks } = useTaskList(token);
 
@@ -198,40 +255,40 @@ export function VaultView({ token }: { token: string | null }) {
       <section aria-label="Vault status" className="pane">
         <SectionHeader title="Status" />
         {loading ? (
-          <p className="muted">Loading vault status…</p>
+          <Spinner label="Loading vault status" />
         ) : status ? (
-          <div>
-            <p>
+          <div className="vault-status">
+            <p className="vault-lockline">
               <StatusChip tone={status.unlocked ? "ok" : "plain"}>
                 {status.unlocked ? "Unlocked" : "Locked"}
-              </StatusChip>{" "}
-              <StatusChip tone={status.has_grants ? "info" : "plain"}>
-                {status.has_grants ? `${status.grants.length} live grant${status.grants.length === 1 ? "" : "s"}` : "No live grants"}
               </StatusChip>
+              <span>
+                {status.unlocked
+                  ? status.has_grants
+                    ? `${status.grants.length} live grant${status.grants.length === 1 ? "" : "s"} — fills are possible for those tasks.`
+                    : "Unlocked, with no live grants — unlock it for a task below to allow fills."
+                  : "Locked — nothing can be filled until it is unlocked for a task."}
+              </span>
             </p>
-            <p className="muted mono">{status.vault_file}</p>
+            <p className="muted mono vault-file">{status.vault_file}</p>
+            <p className="muted vault-idle">
+              Locks itself after 10 minutes idle.
+            </p>
             {status.grants.length > 0 && (
-              <table>
-                <caption>Live grants — ids, tasks and expiry, never a secret value</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Grant</th>
-                    <th scope="col">Task</th>
-                    <th scope="col">Expires</th>
-                    <th scope="col">Card</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <div className="grants-block">
+                <h3>Live grants</h3>
+                <p className="muted grants-note">
+                  Ids, tasks and expiry — never a secret value.
+                </p>
+                <ul className="grant-list">
                   {status.grants.map((g) => (
-                    <tr key={g.grant_id}>
-                      <td className="mono">{g.grant_id}</td>
-                      <td className="mono">{g.task_id}</td>
-                      <td className="mono">{fmtDateTime(g.expires_at)}</td>
-                      <td>{g.has_card ? `ends ${g.card_last4 ?? "—"}` : "—"}</td>
-                    </tr>
+                    <GrantRow key={g.grant_id} grant={g} now={now} />
                   ))}
-                </tbody>
-              </table>
+                </ul>
+              </div>
+            )}
+            {status.unlocked && status.grants.length === 0 && (
+              <EmptyState>No live grants. Unlock the vault for a task below.</EmptyState>
             )}
             <div className="task-actions">
               <button
@@ -239,14 +296,14 @@ export function VaultView({ token }: { token: string | null }) {
                 onClick={() => setConfirmLock(true)}
                 disabled={pending !== null || !status.unlocked}
               >
-                Lock vault
+                {pending === "lock" ? "Locking…" : "Lock vault"}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmRevokeAll(true)}
                 disabled={pending !== null || !status.has_grants}
               >
-                Revoke all grants
+                {pending === "revoke-all" ? "Revoking…" : "Revoke all grants"}
               </button>
             </div>
           </div>
@@ -446,55 +503,57 @@ export function VaultView({ token }: { token: string | null }) {
           {tasks.length === 0 ? (
             <EmptyState>No tasks yet.</EmptyState>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void store();
-              }}
-            >
-              <label htmlFor="vault-store-task">Task</label>
-              <select
-                id="vault-store-task"
-                value={storeTaskId}
-                onChange={(e) => setStoreTaskId(e.target.value)}
-                required
+            <Disclosure summary="Store a password">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void store();
+                }}
               >
-                <option value="">Pick a task…</option>
-                {tasks.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.goal} ({t.status})
-                  </option>
-                ))}
-              </select>
-              <label htmlFor="vault-store-origin">Site (origin)</label>
-              <input
-                id="vault-store-origin"
-                value={storeOrigin}
-                onChange={(e) => setStoreOrigin(e.target.value)}
-                placeholder="https://example.com"
-                required
-              />
-              <label htmlFor="vault-store-field">Field</label>
-              <input
-                id="vault-store-field"
-                value={storeField}
-                onChange={(e) => setStoreField(e.target.value)}
-                placeholder="password"
-                required
-              />
-              <label htmlFor="vault-store-value">Value</label>
-              <input
-                id="vault-store-value"
-                type="password"
-                autoComplete="new-password"
-                value={storeValue}
-                onChange={(e) => setStoreValue(e.target.value)}
-                required
-              />
-              <button type="submit" className="primary" disabled={pending !== null || !storeTaskId}>
-                {pending === "store" ? "Storing…" : "Store password"}
-              </button>
-            </form>
+                <label htmlFor="vault-store-task">Task</label>
+                <select
+                  id="vault-store-task"
+                  value={storeTaskId}
+                  onChange={(e) => setStoreTaskId(e.target.value)}
+                  required
+                >
+                  <option value="">Pick a task…</option>
+                  {tasks.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.goal} ({t.status})
+                    </option>
+                  ))}
+                </select>
+                <label htmlFor="vault-store-origin">Site (origin)</label>
+                <input
+                  id="vault-store-origin"
+                  value={storeOrigin}
+                  onChange={(e) => setStoreOrigin(e.target.value)}
+                  placeholder="https://example.com"
+                  required
+                />
+                <label htmlFor="vault-store-field">Field</label>
+                <input
+                  id="vault-store-field"
+                  value={storeField}
+                  onChange={(e) => setStoreField(e.target.value)}
+                  placeholder="password"
+                  required
+                />
+                <label htmlFor="vault-store-value">Value</label>
+                <input
+                  id="vault-store-value"
+                  type="password"
+                  autoComplete="new-password"
+                  value={storeValue}
+                  onChange={(e) => setStoreValue(e.target.value)}
+                  required
+                />
+                <button type="submit" className="primary" disabled={pending !== null || !storeTaskId}>
+                  {pending === "store" ? "Storing…" : "Store password"}
+                </button>
+              </form>
+            </Disclosure>
           )}
         </section>
       </div>

@@ -33,6 +33,8 @@ EXPECTED_TABLES = {
     "mail_drafts", "mail_log", "connectors", "calendar_events",
     "watch_events", "briefings", "pending_approvals",
     "missions", "mission_runs", "mission_activity",
+    # PR #6: the Agent view's chat thread.
+    "chat_messages",
     # PR #5 fact store: the FTS5 virtual table + its shadow tables.
     "facts_fts", "facts_fts_config", "facts_fts_content",
     "facts_fts_data", "facts_fts_docsize", "facts_fts_idx",

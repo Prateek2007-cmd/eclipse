@@ -97,6 +97,40 @@ export function fmtAuditDateTime(ts: number | null | undefined): string {
   return new Date(ts).toLocaleString();
 }
 
+/** PR #6: "now", re-ticking once a minute so RelativeTime
+ * labels stay fresh ("2 min ago" → "3 min ago"). One cheap
+ * setState per minute per mounted RelativeTime — no
+ * second-level ticking, the labels never need it. */
+export function useRelativeNow(intervalMs: number = 60000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+/** PR #6: unix SECONDS → "just now" / "2 min ago" / "3 hr
+ * ago" / "2 days ago", or a short date for anything older
+ * than a week. Null-safe ("—"). Future timestamps (clock
+ * skew) clamp to "just now". Pure — pass `nowMs` in tests. */
+export function fmtRelative(
+  ts: number | null | undefined,
+  nowMs: number = Date.now(),
+): string {
+  if (ts === null || ts === undefined) return "—";
+  const diffS = Math.max(0, Math.floor(nowMs / 1000) - ts);
+  if (diffS < 45) return "just now";
+  if (diffS < 90) return "1 min ago";
+  const mins = Math.floor(diffS / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours === 1 ? "1 hr ago" : `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return days === 1 ? "1 day ago" : `${days} days ago`;
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
 /** A value the server returns with an uncertain shape (a
  * calendar event's nested start/end) rendered safely. */
 export function displayValue(value: unknown): string {

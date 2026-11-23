@@ -1,0 +1,110 @@
+/* MotionBackground (PR #6, Worker 9; deepened by Worker
+ * 11): calm, light, airy — but VISIBLE now. Four huge soft
+ * shapes drift on 65–90s loops. Transform + opacity only —
+ * never layout properties. Worker 11 raised the opacities
+ * to 0.60–0.70 and the drift to ±6–10vw / ±4–6vh: the old
+ * shapes moved 1–2px in 4s and read as flat. The tints are
+ * still pale (blue, peach, mint), so white glass panels
+ * over them stay high-contrast — every text pair was
+ * re-measured against the shape centres (worst: muted on
+ * pane glass 5.15:1, see tokens.css). */
+
+.motion-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.motion-bg-shape {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(64px);
+  will-change: transform;
+}
+
+/* Pale cool blue, upper left — the largest wash. */
+.motion-bg-blue {
+  width: 55vmax;
+  height: 55vmax;
+  top: -18vmax;
+  left: -12vmax;
+  opacity: 0.7;
+  background: radial-gradient(closest-side, #dce9f5, rgba(220, 233, 245, 0));
+  animation: drift-blue 80s ease-in-out infinite alternate;
+}
+
+/* Pale warm peach, upper right. */
+.motion-bg-peach {
+  width: 48vmax;
+  height: 48vmax;
+  top: -14vmax;
+  right: -14vmax;
+  opacity: 0.65;
+  background: radial-gradient(closest-side, #fbe9dc, rgba(251, 233, 220, 0));
+  animation: drift-peach 65s ease-in-out infinite alternate;
+}
+
+/* Pale mint, lower left. */
+.motion-bg-mint {
+  width: 52vmax;
+  height: 52vmax;
+  bottom: -20vmax;
+  left: -8vmax;
+  opacity: 0.65;
+  background: radial-gradient(closest-side, #ddf0ea, rgba(221, 240, 234, 0));
+  animation: drift-mint 90s ease-in-out infinite alternate;
+}
+
+/* Second pale blue, lower right — keeps the composition
+ * balanced without a fourth hue. */
+.motion-bg-sky {
+  width: 42vmax;
+  height: 42vmax;
+  right: -10vmax;
+  bottom: -14vmax;
+  opacity: 0.6;
+  background: radial-gradient(closest-side, #e4eef7, rgba(228, 238, 247, 0));
+  animation: drift-sky 72s ease-in-out infinite alternate;
+}
+
+/* Real drifts now (±6–10vw / ±4–6vh): the shapes travel
+ * slowly across the screen instead of breathing in place —
+ * visible in a screenshot, still calm at 65–90s per loop.
+ * `alternate` makes every loop seamless. */
+@keyframes drift-blue {
+  from { transform: translate3d(-6vw, 3vh, 0); }
+  to { transform: translate3d(8vw, -5vh, 0); }
+}
+
+@keyframes drift-peach {
+  from { transform: translate3d(6vw, 4vh, 0); }
+  to { transform: translate3d(-8vw, -4vh, 0); }
+}
+
+@keyframes drift-mint {
+  from { transform: translate3d(-8vw, -3vh, 0); }
+  to { transform: translate3d(6vw, 5vh, 0); }
+}
+
+@keyframes drift-sky {
+  from { transform: translate3d(7vw, -4vh, 0); }
+  to { transform: translate3d(-6vw, 5vh, 0); }
+}
+
+/* Hidden tab: freeze the drift (class set by the component
+ * on visibilitychange). */
+.motion-bg.is-paused .motion-bg-shape {
+  animation-play-state: paused;
+}
+
+/* Reduced motion: the same composition, static. The
+ * `!important` beats the global duration collapse in
+ * tokens.css — animation-name: none means no animation
+ * runs at all, so the shapes sit at their base positions. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-bg-shape {
+    animation: none !important;
+  }
+}

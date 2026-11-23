@@ -1,0 +1,655 @@
+/* Agent view (PR #6): a chat thread. View-specific styles
+ * only — tokens, shared components and the shell live in
+ * tokens.css / app.css. 4px grid throughout; motion is
+ * colour/border only, on the shared durations. Light theme:
+ * every colour comes from the tokens Worker 5 owns — never
+ * a hardcoded dark value here.
+ *
+ * Layout: one centred column (~800px) for the head, the
+ * thread, the recent-tasks disclosure and the composer, like
+ * Muse. Empty thread: a centred hero (greeting, composer,
+ * suggestion chips). Active thread: messages + inline task
+ * cards, composer pinned at the bottom. */
+
+/* ---------- Centred column ---------- */
+
+.agent-view .view-head,
+.chat-recent,
+.chat-pinned,
+.chat-thread,
+.chat-hero,
+.chat-hero-error,
+.chat-loading {
+  max-width: 800px;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.chat-loading {
+  padding: var(--space-6) 0;
+  text-align: center;
+}
+
+/* ---------- Empty-thread hero ---------- */
+
+.chat-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-6) 0;
+  text-align: center;
+}
+
+.chat-hero-title {
+  /* The greeting is the one big moment on the empty screen:
+   * 32px/700, a step above view titles (28px). */
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: var(--lh-heading);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.chat-hero-subline {
+  margin: 0;
+  max-width: 60ch;
+  text-wrap: pretty;
+  line-height: var(--lh-body);
+}
+
+.chat-hero .chat-composer {
+  width: 100%;
+  text-align: start;
+}
+
+.chat-suggestions {
+  justify-content: center;
+  margin: 0;
+}
+
+.chat-hero-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.chat-hero-error {
+  padding-top: var(--space-4);
+}
+
+/* ---------- Thread ---------- */
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  /* Bottom clearance = the pinned composer bar + a 24px
+   * gap (see --composer-clearance in tokens.css): the
+   * thread's last row can scroll fully above the stuck bar,
+   * so no content ever slides under it (shot 07's
+   * half-hidden "Plan this task" button). */
+  padding: var(--space-2) 0 var(--composer-clearance);
+  min-width: 0;
+}
+
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chat-row-user {
+  align-items: flex-end;
+}
+
+.chat-row-agent {
+  align-items: flex-start;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: var(--space-3) var(--space-4);
+  /* Modern chat radii: 18px all round, one tight corner
+   * (4px) on the speaking side — the tail. */
+  border-radius: 18px;
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  /* Solid surfaces, deliberately: a long thread would put a
+   * backdrop-filter on every bubble — one blur per row is
+   * the perf cost the glass system refuses to pay. The
+   * agent bubble uses the translucent glass colour without
+   * the blur, so it still picks up the wash beneath it. */
+  box-shadow: var(--shadow-card);
+}
+
+.chat-bubble p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* User: a very light warm tint — a pale wash of the accent
+ * over the surface, calm, never saturated. The plain surface
+ * line is the fallback for browsers without color-mix.
+ * Text on the tint is 16.10:1. Tight bottom-right corner. */
+.chat-bubble-user {
+  background: var(--surface-hover);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border: 1px solid var(--border);
+  border-bottom-right-radius: 4px;
+}
+
+/* Agent: white glass (translucent, no blur — see above) with
+ * a tight bottom-left corner. Text on it is 16.48:1 over the
+ * worst (peach) backdrop, muted 5.19:1. The agent mark —
+ * the eclipse glyph at the bubble's left — is what makes an
+ * agent message unmistakable, not just the alignment. */
+.chat-bubble-agent {
+  background: var(--glass-bg);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+
+/* The agent row: mark + bubble on one line, full thread
+ * width so the bubble's 85% cap resolves against the
+ * thread, not the shrink-wrapped row. */
+.chat-msg {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+}
+
+/* The AGENT MARK: a 28px disc in a soft vermilion tint
+ * carrying the eclipse glyph — a ring with the occluding
+ * disc. Decorative (aria-hidden in the markup); the ring is
+ * secondary ink, the disc is the accent. */
+.chat-agent-mark {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-agent-mark svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-agent-mark .eclipse-ring {
+  stroke: var(--text-secondary);
+}
+
+.chat-agent-mark .eclipse-disc {
+  fill: var(--accent);
+}
+
+/* Agent meta aligns with the bubble, not the mark:
+ * 28px mark + 8px gap. */
+.chat-row-agent .chat-meta {
+  padding-left: 36px;
+}
+
+.chat-meta {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  padding-inline: var(--space-1);
+}
+
+.chat-source {
+  font-size: var(--text-sm);
+}
+
+.chat-thinking {
+  display: flex;
+  align-items: center;
+}
+
+/* The task card spans the full thread width under its
+ * creating message — it is the one rich element in the
+ * thread, not a bubble. */
+.chat-task {
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.chat-thread .human-error {
+  width: 100%;
+}
+
+/* ---------- Composer ---------- */
+
+/* The composer is a FLOATING GLASS BAR in both layouts —
+ * the hero and the pinned thread share this one component
+ * and this one style. Large radius (22px), strong glass,
+ * strong blur, large shadow. The textarea inside is
+ * borderless (its text never sits on glass — the bar is
+ * the surface, the input is the hole), and the send button
+ * is a vermilion circle at the input's right end.
+ * Resting height is 62px at every width (12px padding +
+ * 36px send circle + 12px padding + 2px border — the 16px
+ * mobile input still fits inside the 36px row), which is
+ * what --composer-clearance is sized from. */
+.chat-composer {
+  display: flex;
+  flex-direction: row;
+  gap: var(--space-2);
+  align-items: flex-end;
+  max-width: 800px;
+  margin-inline: auto;
+  width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: var(--glass-blur-strong);
+  backdrop-filter: var(--glass-blur-strong);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: var(--glass-shadow-lg);
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+/* Focus lives on the BAR, not the borderless input: when the
+ * textarea is focused the bar takes the accent border and
+ * the focus ring. The textarea's own outline is suppressed
+ * (the bar's ring replaces it — one ring, not two). */
+.chat-composer:focus-within {
+  border-color: var(--accent);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.chat-composer textarea {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  resize: none;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: var(--lh-body);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 6px 0;
+  box-shadow: none;
+}
+
+.chat-composer textarea:focus,
+.chat-composer textarea:focus-visible {
+  outline: none;
+  border-color: transparent;
+}
+
+/* Send: a 36px vermilion circle with an arrow-up glyph,
+ * INSIDE the bar at the input's right end. Muted and
+ * disabled while the input is empty (grey track, muted
+ * arrow: 4.66:1); vermilion with dark ink (6.71:1) once
+ * there is text to send. The flat rectangle below the box
+ * is gone. */
+.chat-send {
+  flex-shrink: 0;
+  /* The base `form button` rule left-aligns buttons; the
+   * send circle sits at the row's end (bottom-right when
+   * the textarea grows). */
+  align-self: flex-end;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.chat-send:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.chat-send:active {
+  background: var(--accent);
+  filter: brightness(0.95);
+}
+
+.chat-send svg {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-send:disabled {
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text-muted);
+  /* No extra fade: muted on raised is already 4.66:1, and
+   * the grey track + grey arrow read as disabled on their
+   * own. */
+  opacity: 1;
+}
+
+.chat-send:disabled:hover, .chat-send:disabled:active {
+  background: var(--bg-raised);
+  filter: none;
+}
+
+/* While a send is in flight the button stays vermilion
+ * (it is working, not empty) and carries a ring-only
+ * spinner in dark ink on the vermilion. */
+.chat-send-busy:disabled {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  opacity: 1;
+}
+
+.chat-send-busy:disabled:hover, .chat-send-busy:disabled:active {
+  background: var(--accent);
+  filter: none;
+}
+
+.chat-composer .chat-send progress.spinner:indeterminate {
+  --spinner-color: var(--accent-ink);
+  --track-color: rgba(255, 255, 255, 0);
+}
+
+/* Thread layout only: pinned to the bottom of the viewport
+ * while the thread scrolls above it. The glass lives on
+ * .chat-composer now, so this rule is only the sticky
+ * positioning. Bottom stays 0 — the bar sits flush at the
+ * viewport edge while stuck, and the thread's
+ * --composer-clearance padding keeps content out from
+ * under it. */
+.chat-composer-pinned {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+}
+
+/* Visually hidden, still announced: the composer's label. */
+.chat-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Recent tasks disclosure ---------- */
+
+/* One column: goal on top, chip + time below. The goal
+ * clamps to two lines; the full goal is in the task card,
+ * so the clamp never hides the only copy. */
+.task-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.task-row-goal {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.task-row-meta {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---------- Task card (inline in the thread) ---------- */
+
+.task-card {
+  /* PR #6 glass: the task card is a top-level card in the
+   * thread (not inside a pane), so it gets the pane's glass
+   * — same tokens, same blur, same shadow. One glass layer. */
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  box-shadow: var(--glass-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.task-card-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.task-card-goal {
+  font-weight: 600;
+  line-height: var(--lh-heading);
+  overflow-wrap: anywhere;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-card-meta {
+  margin: 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The Dismiss link reads as text, not a button — no pill,
+ * no shadow, no lift. */
+.task-card-dismiss {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  box-shadow: none;
+  border-radius: 0;
+  font-weight: 400;
+}
+
+.task-card-dismiss:hover, .task-card-dismiss:active {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  color: var(--text-secondary);
+}
+
+.task-card h4 {
+  font-size: var(--text-base);
+  line-height: var(--lh-heading);
+  margin: 0;
+}
+
+.task-card-note {
+  margin: 0;
+}
+
+.task-card .empty-state {
+  margin-top: 0;
+}
+
+.agent-constraints {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.task-card .approval-card {
+  margin-top: 0;
+}
+
+.task-card .approval-card .approval-banner {
+  margin-bottom: var(--space-3);
+}
+
+.approval-none {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin-bottom: var(--space-3);
+}
+
+.approval-none p {
+  margin: 0;
+}
+
+.approval-explainer {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.task-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* ---------- Plan timeline ---------- */
+
+.plan-progress {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.plan-step {
+  align-items: flex-start;
+}
+
+.plan-step-num {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  min-width: 20px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.plan-step-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.plan-step-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.plan-step-desc {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-step-note {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The step-details expand is a quiet nested disclosure, not
+ * a card in a card — same treatment app.css gives nested
+ * disclosures in .human-error and .activity-line. */
+.plan-step .disclosure {
+  border: none;
+  background: transparent;
+}
+
+.plan-step .disclosure > summary {
+  padding: var(--space-1) 0 0;
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.plan-step .disclosure-body {
+  padding: 0 0 0 22px;
+}
+
+/* ---------- Receipts ---------- */
+
+.receipt-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.receipt-when {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.receipt-confirm {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The confirmation expand is quiet, like the step details. */
+.receipt-row .disclosure {
+  border: none;
+  background: transparent;
+}
+
+.receipt-row .disclosure > summary {
+  padding: var(--space-1) 0 0;
+  font-weight: 400;
+  font-size: var(--text-sm);
+}
+
+.receipt-row .disclosure-body {
+  padding: 0 0 0 22px;
+}
+
+/* ---------- Mobile (390px) ---------- */
+
+@media (max-width: 480px) {
+  .chat-bubble {
+    max-width: 100%;
+  }
+
+  .chat-hero {
+    padding: var(--space-5) 0;
+  }
+
+  .task-card {
+    padding: var(--space-3);
+  }
+
+  .receipt-when {
+    margin-left: 0;
+  }
+}

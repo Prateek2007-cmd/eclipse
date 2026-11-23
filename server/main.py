@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import audit_api, connectors_api, jobs_api, mail_api, memory_api, missions_api, missions_runner_api, monitor_api, proof_api, rag_api, system, tasks_api, vault_api
+from .api import audit_api, chat_api, connectors_api, jobs_api, mail_api, memory_api, missions_api, missions_runner_api, monitor_api, proof_api, rag_api, system, tasks_api, vault_api
 from .core import config, db
 from .missions import runner as missions_runner
 
@@ -52,6 +52,7 @@ app.add_middleware(
 
 app.include_router(system.router)
 app.include_router(audit_api.router)
+app.include_router(chat_api.router)
 app.include_router(memory_api.router)
 app.include_router(tasks_api.router)
 app.include_router(jobs_api.router)
