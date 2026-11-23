@@ -1,32 +1,165 @@
 /* Eclipse design tokens (§5.1, §5.8 step 1). Every component
  * reads from these variables. No hardcoded colors elsewhere.
- * 60/30/10 dark: background #070B12, surfaces #12212B, accent
+ * 60/30/10 LIGHT (Prateek's call, 2026-11-23 — this overrides
+ * Akash's dark system): page #F3F5F7, cards #FFFFFF, accent
  * #FF6B35 only on the primary action, a firing watch, and the
- * current stage. Body text is never orange. */
+ * current stage. Body text is never orange. The two dark
+ * insets (--ink-bg) are deliberate: the code block and the
+ * 3D scene are the only dark moments on the page. */
 :root {
-  --bg: #070b12;
-  --bg-raised: #0b111c;
-  --surface: #12212b;
-  --surface-hover: #162b38;
-  --border: #1e3a4a;
-  --accent: #ff6b35;
+  --bg: #F3F5F7;
+  --bg-raised: #E9EEF2;
+  --surface: #FFFFFF;
+  --surface-hover: #F0F4F7;
+  /* PR #6 Worker 11 (component redesign): the hairline got
+   * one step darker so glass edges read in a screenshot —
+   * still a hairline, never a heavy frame. */
+  --border: #C9D3DB;
+  --accent: #FF6B35;
   --accent-ink: #1a0d05;
-  --text: #e8f0f2;
-  --text-secondary: #9fb3bc;
-  /* Sprint 9 fix (review M21): #6b8290 on surface was 4.08:1,
-   * below WCAG AA 4.5:1. #7e97a3 clears it. */
-  --text-muted: #7e97a3;
-  --success: #34d399;
-  --warning: #fbbf24;
-  --danger: #f87171;
-  --info: #60a5fa;
-  --radius-card: 8px;
-  --radius-panel: 12px;
+  --text: #101C26;
+  --text-secondary: #46586A;
+  /* PR #6 light theme: the contract value #6E7F8D measured
+   * 4.13:1 on white (below WCAG AA 4.5:1), so the coordinator
+   * changed it to #5A6C7A: 5.44:1 on white, 4.66:1 on
+   * --bg-raised. */
+  --text-muted: #5a6c7a;
+  --success: #0B7A4B;
+  --warning: #8A6100;
+  --danger: #C0272D;
+  --info: #1B5FC1;
+  /* PR #6 Worker 11: cards read as cards now — 18px panels,
+   * 12px inner controls, pills for every action. */
+  --radius-card: 12px;
+  --radius-panel: 18px;
   --radius-pill: 999px;
+  /* PR #6 foundation: warning tint for the approval banner —
+   * the only tinted surface in the workspace. */
+  --warning-tint: #FFF4D6;
+  /* PR #6 light theme: the dark inset — RawData <pre> blocks
+   * and the Privacy Boundary scene sit in near-black on the
+   * light page, on purpose. --ink-bg is the old dark --bg,
+   * kept so the 3D scene palette (colors.ts) still matches. */
+  --ink-bg: #070B12;
+  --ink-text: #E8F0F2;
+  /* PR #6 light theme: the one shadow. Depth comes from
+   * hairlines + surface steps first; this is only for floating
+   * elements (dropdowns, dialogs, banners) that need lift. No
+   * coloured shadows, no glows. */
+  --shadow-card: 0 1px 2px rgba(16, 28, 38, 0.06), 0 1px 3px rgba(16, 28, 38, 0.04);
+  /* PR #6 glass visual system (Worker 8, deepened by
+   * Worker 11): the wash + the glass tokens. Glass is ONE
+   * layer per screen region — panes and top-level cards blur
+   * the wash, chrome blurs whatever scrolls beneath it, and
+   * everything nested inside a glass surface stays solid (a
+   * second blur would be muddy and costs compositing). Every
+   * glass value lives here; no hardcoded rgba or blur in the
+   * views.
+   *
+   * Opacity is set by what can sit beneath the surface, not
+   * by taste. --glass-bg (0.72) only ever covers the
+   * near-white wash. --glass-bg-strong (0.86) covers the
+   * wash (sidebar) or carries no text on the glass itself
+   * (composer — its text is inside solid controls).
+   * --glass-bg-chrome (0.92) can cover anything, including a
+   * dark inset scrolling under the sticky topbar, and still
+   * holds muted text at 4.57:1 in that worst case (measured;
+   * 0.86 would be 4.00:1 and fail).
+   *
+   * Worker 11 re-measured every pair against the STRONGER
+   * motion background (shapes at 0.60–0.70 opacity) — the
+   * worst backdrop is now a shape centre, not the wash.
+   * Pane glass (0.72) over the blue shape centre: text
+   * 16.34 / secondary 6.94 / muted 5.15. Over the peach
+   * centre: 16.48 / 7.00 / 5.19. Over the wash bottom:
+   * 16.65 / 7.07 / 5.24. Strong glass (0.86) worst (blue):
+   * 16.82 / 7.14 / 5.30. Chrome (0.92) over the dark inset:
+   * 14.49 / 6.15 / 4.57. Warning glass over peach: warning
+   * text 4.98. All clear WCAG AA 4.5:1. */
+  --wash-from: #F3F5F7;
+  --wash-to: #E9F0F7;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-bg-strong: rgba(255, 255, 255, 0.86);
+  --glass-bg-chrome: rgba(255, 255, 255, 0.92);
+  /* --warning-tint (#FFF4D6) at 82% — the approval surfaces
+   * keep their tint as glass. */
+  --glass-bg-warn: rgba(255, 244, 214, 0.82);
+  /* The light edge: a 1px inset highlight along the top of
+   * every glass surface, inside the shadow tokens. Worker 11
+   * raised it to 0.85 so the highlight is actually visible
+   * in a screenshot. The visible hairline is still
+   * var(--border). */
+  --glass-edge: rgba(255, 255, 255, 0.85);
+  /* Blur raised by Worker 11 (12→18px cards, 16→20px
+   * chrome): the old blur was nearly invisible, so the glass
+   * read as flat white. 20px is the cap — beyond it the
+   * backdrop turns to mush and compositing costs climb. */
+  --glass-blur: blur(18px) saturate(1.15);
+  --glass-blur-strong: blur(20px) saturate(1.2);
+  /* Layered neutral shadows (guide: visual-effects): one
+   * small tight layer + one large diffuse layer, never a
+   * glow, never coloured. Worker 11 deepened both layers so
+   * the glass visibly floats over the wash. */
+  --glass-shadow: inset 0 1px 0 var(--glass-edge), 0 1px 2px rgba(16, 28, 38, 0.07), 0 12px 32px rgba(16, 28, 38, 0.1);
+  --glass-shadow-lg: inset 0 1px 0 var(--glass-edge), 0 2px 6px rgba(16, 28, 38, 0.08), 0 20px 48px rgba(16, 28, 38, 0.14);
+  /* PR #6 Worker 11: the button shadows. Resting, hover
+   * (lifted — paired with translateY(-1px)), pressed
+   * (settled back down). Neutral only, never coloured. */
+  --shadow-btn: 0 1px 2px rgba(16, 28, 38, 0.08), 0 4px 12px rgba(16, 28, 38, 0.07);
+  --shadow-btn-hover: 0 2px 4px rgba(16, 28, 38, 0.09), 0 8px 20px rgba(16, 28, 38, 0.12);
+  --shadow-btn-active: 0 1px 2px rgba(16, 28, 38, 0.08);
+  /* Interactive cards only (Prateek's override of unslop's
+   * no-hover-lift rule): a clickable card lifts like a
+   * button. Static cards never use this. */
+  --shadow-card-hover: inset 0 1px 0 var(--glass-edge), 0 2px 6px rgba(16, 28, 38, 0.08), 0 16px 36px rgba(16, 28, 38, 0.12);
+  /* PR #6 foundation: type scale (better-typography — sizes
+   * in rem, unitless line-heights, headings 1.2–1.3, body
+   * 1.5–1.6). Roles, not raw sizes: views use these, never a
+   * bare px font-size. */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.25rem;
+  /* PR #6 Worker 11: view titles are 28px/700 now — the
+   * step from title (28) to section (18) to body (14) has
+   * to read at a glance. */
+  --text-3xl: 1.75rem;
+  --lh-tight: 1.25;
+  --lh-heading: 1.3;
+  --lh-body: 1.5;
+  --lh-loose: 1.6;
+  /* PR #6 foundation: motion — one easing curve, 150–250ms,
+   * colour/background/border/opacity/transform only. Never
+   * animate width/height/margins. */
+  --ease: ease-out;
+  --dur-fast: 150ms;
+  --dur-medium: 200ms;
+  --dur-slow: 250ms;
+  /* PR #6 foundation: the one focus ring, used everywhere. */
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
+  /* PR #6 foundation: content measure — the console caps
+   * here so long lines stay readable on wide screens. */
+  --content-max: 1320px;
+  /* PR #6 Worker 11: the thread's bottom clearance above
+   * the pinned composer. The resting composer bar is 62px
+   * tall (12px padding + 36px send circle + 12px padding +
+   * 2px border, identical at 1440px and 390px — the 16px
+   * mobile input still fits inside the 36px row), so 62 +
+   * 24px gap = 86px, rounded up to 96px for sub-pixel and
+   * focus-ring slack. The thread's padding-bottom uses this
+   * so its last row can scroll fully above the stuck bar
+   * (shot 07's half-hidden "Plan this task" button). When
+   * the textarea autogrows past one line the bar grows with
+   * it and can cover the gap while typing — a transient
+   * typing state, not the resting layout. */
+  --composer-clearance: 96px;
   /* Workspace redesign: the modal backdrop and the sidebar
    * widths are tokens too — no hardcoded colours or layout
    * constants in the views. */
-  --backdrop: rgba(0, 0, 0, 0.6);
+  --backdrop: rgba(16, 28, 38, 0.45);
   --sidebar-width: 220px;
   --sidebar-collapsed-width: 64px;
   /* Sprint 9 fix (review M19): the webfont names (Inter, Sora,
@@ -45,45 +178,142 @@
   --space-6: 32px;
 }
 
+/* Glass fallbacks, by token redefinition — one place turns
+ * the blur off everywhere, so no view needs its own
+ * override.
+ *
+ * ≤640px: backdrop-filter janks on phones, so the blur goes
+ * and the chrome/strong surfaces go solid white (they sit
+ * over scrolling content; translucent without blur would let
+ * text show through). Panes and cards keep their translucent
+ * bg — they sit on the near-white wash, so they still read
+ * as glass. */
+@media (max-width: 640px) {
+  :root {
+    --glass-blur: none;
+    --glass-blur-strong: none;
+    --glass-bg-strong: #FFFFFF;
+    --glass-bg-chrome: #FFFFFF;
+  }
+}
+
+/* Reduced transparency: solid surfaces, no blur. The wash
+ * stays — it is a near-white gradient, not transparency. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass-bg: #FFFFFF;
+    --glass-bg-strong: #FFFFFF;
+    --glass-bg-chrome: #FFFFFF;
+    --glass-bg-warn: var(--warning-tint);
+    --glass-blur: none;
+    --glass-blur-strong: none;
+  }
+}
+
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* PR #6 glass: the wash. Glass needs something to blur —
+   * a very pale cool gradient, fixed, almost-white with a
+   * whisper of cool depth at the bottom. No hue jumps, no
+   * purple, no blobs. The flat --bg stays as the fallback
+   * for browsers without gradient interpolation spaces
+   * (guide: visual-effects — `in oklab` keeps neutrals
+   * neutral; `in srgb` would drift). */
+  background-color: var(--bg);
+  background-image: linear-gradient(to bottom in oklab, var(--wash-from), var(--wash-to));
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 1.5;
-  color-scheme: dark;
+  font-size: var(--text-base);
+  line-height: var(--lh-body);
+  color-scheme: light;
+  /* Safety net, not a substitute for fixing overflow at the
+   * source: nothing in the workspace may scroll sideways at
+   * 390px. `clip` (not hidden) keeps sticky positioning
+   * working. */
+  overflow-x: clip;
 }
 
-h1, h2, h3 { font-family: var(--font-display); margin: 0; }
-h1 { font-size: 20px; }
-h2 { font-size: 16px; }
-h3 { font-size: 14px; }
+h1, h2, h3 { font-family: var(--font-display); margin: 0; line-height: var(--lh-heading); }
+h1 { font-size: var(--text-2xl); line-height: var(--lh-tight); letter-spacing: -0.01em; }
+/* PR #6 Worker 11: section titles are 18px/700 — a clear
+ * step above body (14px) and below view titles (28px,
+ * .view-head h2 in app.css). */
+h2 { font-size: var(--text-xl); font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: var(--text-base); font-weight: 600; }
+
+/* Numbers that change (counters, quotas, table figures) get
+ * tabular figures so digits never shift the layout. */
+.num { font-variant-numeric: tabular-nums; }
 
 button, input, textarea, select {
   font: inherit;
   color: inherit;
 }
 
+/* ---------- Buttons (PR #6 Worker 11: the headline change)
+ *
+ * Every action is a rounded-full pill with a layered soft
+ * shadow. Hover lifts 1px and deepens the shadow (180ms);
+ * press settles back down and shrinks the shadow; focus is
+ * the global accent ring; disabled is faded, flat, and does
+ * not move. Icon + label buttons lay out inline with an 8px
+ * gap (see .btn in app.css — the same treatment as classes
+ * for non-<button> elements). Buttons that are NOT actions
+ * opt out where they live: nav rows (.nav-list button),
+ * card rows (.task-list button), text links
+ * (.task-card-dismiss), and icon buttons (.btn-icon). */
 button {
   cursor: pointer;
   border: 1px solid var(--border);
-  /* 60/30/10: panes are now --surface, so buttons sit one step
-   * lighter (--surface-hover) to read on both the pane and the
-   * page background. */
-  background: var(--surface-hover);
-  border-radius: var(--radius-card);
-  padding: var(--space-2) var(--space-3);
-  /* Sprint 9 fix (review M20): plan §5.8 requires 150–250ms
-   * ease-out for state changes. */
-  transition: background-color 200ms ease-out, border-color 200ms ease-out, filter 200ms ease-out, opacity 200ms ease-out;
+  /* Light theme: the default (secondary) button is a white
+   * surface with a hairline border and dark text. On a white
+   * pane the border does the work; on a --bg-raised row the
+   * white step reads. Hover is one surface step down plus
+   * the lift. */
+  background: var(--surface);
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 500;
+  box-shadow: var(--shadow-btn);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  /* 180ms lift: transform + shadow are the moving parts,
+   * colour/border/filter ride along. Never animate
+   * width/height/margins. */
+  transition: background-color 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease), transform 180ms var(--ease), filter 180ms var(--ease), opacity 180ms var(--ease);
 }
-button:hover { filter: brightness(1.15); }
-button:disabled { opacity: 0.5; cursor: default; }
+button:hover {
+  background: var(--surface-hover);
+  box-shadow: var(--shadow-btn-hover);
+  transform: translateY(-1px);
+}
+/* Pressed state: settle back down, shadow shrinks. */
+button:active {
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-btn-active);
+  transform: translateY(0);
+}
+/* Disabled: faded AND flat — no shadow, no lift, so a dead
+ * button never looks pressable. */
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+/* A disabled button must not change on hover or press. */
+button:disabled:hover, button:disabled:active {
+  background: var(--surface);
+  box-shadow: none;
+  transform: none;
+}
 
 button.primary {
   background: var(--accent);
@@ -91,14 +321,27 @@ button.primary {
   color: var(--accent-ink);
   font-weight: 600;
 }
-button.primary:hover { filter: brightness(1.08); }
+/* Primary re-asserts its background: the base :hover would
+ * otherwise wash it to --surface-hover. Lightening the
+ * vermilion keeps the dark ink at 6.7:1. The lift stays —
+ * the primary action lifts like every button. */
+button.primary:hover { background: var(--accent); filter: brightness(1.08); }
+button.primary:active { background: var(--accent); filter: brightness(0.95); }
+/* Disabled primary stays vermilion (faded by opacity). */
+button.primary:disabled:hover, button.primary:disabled:active { background: var(--accent); filter: none; }
+
+/* Inline SVG icons inside buttons: one size, currentColor,
+ * never a second colour. */
+button svg {
+  flex-shrink: 0;
+}
 
 a { color: var(--info); }
 
 /* Visible 2px focus ring in accent on every interactive element. */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 input, textarea, select {
