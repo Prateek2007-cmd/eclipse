@@ -14,12 +14,14 @@ const OFFSCREEN_URL = "offscreen.html";
 const SERVER = "http://127.0.0.1:8000";
 
 import { BRIEFING_ALARM, checkDueWatches, watchAlarmName, type Watch } from "./monitor.js";
+import { MISSIONS_ALARM, MISSIONS_PERIOD_MIN, defaultNotifyApproval, runDueMissions, type ElementInfo, type ExecuteStepResult, type MissionDue, type Observation, type PlannerAction } from "./missions.js";
+import { notifyBriefing, notifyWatchFired } from "./notifications.js";
 
 async function serverToken(): Promise<string> {
   const stored = await chrome.storage.local.get("eclipseToken");
   const token = stored["eclipseToken"];
   if (typeof token !== "string" || token.length === 0) {
-    throw new Error("no Eclipse server token stored (open the workspace once)");
+    throw new Error("no Eclipse server token stored (paste it in the Eclipse popup)");
   }
   return token;
 }
@@ -64,14 +66,17 @@ async function scheduleWatchAlarms(): Promise<void> {
         periodInMinutes: watch.interval_min,
       });
     }
-    // M13: the first briefing lands tomorrow morning at 08:00,
+    // PR #5 (W2): one missions alarm — the extension pulls due
+    // mission browser work every 15 minutes (the server cannot
+    // push; see server/missions/runner.py). Re-creating an
+    // existing alarm replaces it, so no clear is needed.
+    await chrome.alarms.create(MISSIONS_ALARM, {
+      periodInMinutes: MISSIONS_PERIOD_MIN,
+    });
+    // M13: the first briefing lands tomorrow morning at 09:00,
     // not up to 24h after startup.
-    const now = new Date();
-    const next = new Date(now);
-    next.setHours(8, 0, 0, 0);
-    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
     await chrome.alarms.create(BRIEFING_ALARM, {
-      delayInMinutes: Math.ceil((next.getTime() - now.getTime()) / 60000),
+      delayInMinutes: minutesUntilBriefing(new Date()),
       periodInMinutes: 1440,
     });
   } catch (err) {
@@ -92,13 +97,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-// B5: the token appears when the user first opens the workspace
-// and stores it — schedule then, not only at startup.
+// B5: the token appears when the user saves it in the popup
+// (popup writes chrome.storage.local) — schedule then, not
+// only at startup.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes["eclipseToken"]?.newValue) {
     void scheduleWatchAlarms();
   }
 });
+
+/** Local hour of the daily briefing alarm (PR #5 §3.9: 09:00
+ * — the user's machine is in IST, so local 09:00 is IST 09:00;
+ * the server tick is the backstop when Chrome is closed). */
+export const BRIEFING_HOUR_LOCAL = 9;
+
+/** Minutes from `now` until the next 09:00 briefing alarm.
+ * Pure (injectable clock) so the alarm time is testable with a
+ * fixed clock — see extension/tests/notifications.test.mjs. */
+export function minutesUntilBriefing(now: Date): number {
+  const next = new Date(now);
+  next.setHours(BRIEFING_HOUR_LOCAL, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+  return Math.ceil((next.getTime() - now.getTime()) / 60000);
+}
 
 /** Normalise a URL for tab matching: origin + pathname without
  * a trailing slash + search. Two URLs that differ only by a
@@ -109,11 +130,102 @@ export function normaliseWatchUrl(raw: string): string {
   return `${u.origin}${path}${u.search}`;
 }
 
+/** Find an open tab whose URL matches (B3: the tab's ACTUAL
+ * URL, not just its origin — the same rule as the watch
+ * branch's inline matcher). Used by the missions branch. */
+async function findTabByUrl(url: string): Promise<number | null> {
+  let wanted: string;
+  try {
+    wanted = normaliseWatchUrl(url);
+  } catch {
+    return null;
+  }
+  const origin = new URL(url).origin;
+  const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+  for (const tab of tabs) {
+    if (!tab.url || tab.id === undefined) continue;
+    try {
+      if (normaliseWatchUrl(tab.url) === wanted) return tab.id;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/** POST an execute step, mapping the server's 409s to the
+ * driver's result shape. serverCall throws without the body,
+ * so this uses fetch directly: the grounding 409 carries
+ * {reobserve: true}, and the approval gate carries the
+ * approval id in its error text ("... with approval_id
+ * appr-..."). */
+async function executeStepOnServer(
+  taskId: string,
+  step: number,
+  observation: Observation,
+): Promise<ExecuteStepResult> {
+  const token = await serverToken();
+  const res = await fetch(`${SERVER}/tasks/${taskId}/steps/${step}/execute`, {
+    method: "POST",
+    headers: { "X-Eclipse-Token": token, "Content-Type": "application/json" },
+    body: JSON.stringify({ observation }),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    detail?: unknown;
+    action?: PlannerAction;
+    expected_end_state?: string;
+    element?: ElementInfo;
+    allowed_sites?: string[];
+    fill?: Record<string, string>;
+  };
+  if (res.ok) {
+    return {
+      ok: true,
+      action: data.action as PlannerAction,
+      expected_end_state: data.expected_end_state ?? "",
+      element: data.element,
+      allowed_sites: data.allowed_sites,
+      fill: data.fill,
+    };
+  }
+  const detail = data?.detail;
+  if (
+    res.status === 409 &&
+    detail !== null &&
+    typeof detail === "object" &&
+    (detail as { reobserve?: unknown }).reobserve === true
+  ) {
+    return {
+      ok: false,
+      reobserve: true,
+      detail: String((detail as { error?: unknown }).error ?? "grounding failed"),
+    };
+  }
+  const text = typeof detail === "string" ? detail : `server ${res.status}`;
+  const approvalMatch = /approval_id (appr-[0-9a-f]+)/.exec(text);
+  if (res.status === 409 && /needs approval|approval needed/i.test(text)) {
+    return {
+      ok: false,
+      approvalNeeded: true,
+      approvalId: approvalMatch?.[1],
+      detail: text,
+    };
+  }
+  return { ok: false, detail: text };
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === BRIEFING_ALARM) {
     (async () => {
       try {
-        await serverCall("/monitor/briefing", { method: "POST" });
+        const briefing = (await serverCall("/monitor/briefing", { method: "POST" })) as {
+          cards?: unknown[];
+        };
+        // Notify once per IST day (notifyBriefing dedups) — the
+        // server day guard may return an already-built briefing,
+        // and that is still worth one notification.
+        const count = Array.isArray(briefing.cards) ? briefing.cards.length : 0;
+        void notifyBriefing(count);
       } catch {
         // The briefing is best-effort; the user can rebuild it
         // on demand from the workspace.
@@ -121,13 +233,106 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     })();
     return;
   }
+  if (alarm.name === MISSIONS_ALARM) {
+    (async () => {
+      try {
+        // B4/M16: a failed run is logged, not silently dropped.
+        const summary = await runDueMissions({
+          fetchDue: async () => {
+            const data = (await serverCall("/missions/due")) as {
+              missions: MissionDue[];
+            };
+            return data.missions;
+          },
+          findTab: findTabByUrl,
+          observe: async (tabId) =>
+            (await observeTab(tabId)) as Observation,
+          executeStep: async (taskId, step, observation) =>
+            executeStepOnServer(taskId, step, observation),
+          performAction: async (tabId, action, options) => {
+            // The same message the eclipse.execute listener
+            // forwards — the driver calls the content script
+            // directly (it already runs in the service worker).
+            const result = (await chrome.tabs.sendMessage(tabId, {
+              type: "execute",
+              action,
+              options,
+            })) as { ok: boolean; detail?: string; url?: string };
+            return result;
+          },
+          verifyStep: async (
+            taskId,
+            step,
+            observation,
+            previousObservation,
+            expectedEndState,
+            previousUrl,
+          ) => {
+            const result = (await serverCall(
+              `/tasks/${taskId}/steps/${step}/verify`,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  observation,
+                  previous_observation: previousObservation,
+                  expected_end_state: expectedEndState,
+                  previous_url: previousUrl,
+                }),
+              },
+            )) as { verified: boolean; reason: string; retry: boolean };
+            return result;
+          },
+          checkWatch: async (job, tabId) => {
+            // The monitor path, for a price mission's watch:
+            // ask the content script for the selector's value,
+            // report it, return the verdict.
+            const obs = (await chrome.tabs.sendMessage(tabId, {
+              type: "eclipse.watchCheck",
+              selector: job.selector,
+            })) as { found: boolean; value: string | null };
+            const verdict = (await serverCall(
+              `/monitor/watches/${job.watch_id}/check`,
+              { method: "POST", body: JSON.stringify(obs) },
+            )) as {
+              fired: boolean;
+              broken: boolean;
+              status: string;
+              reason: string;
+            };
+            if (verdict.fired) {
+              // A price mission's watch fires like any watch —
+              // the user hears about it (W3's notification).
+              void notifyWatchFired(job.url ?? job.watch_id ?? "");
+            }
+            return verdict;
+          },
+          onApprovalNeeded: defaultNotifyApproval,
+        });
+        if (summary.errors.length > 0) {
+          console.warn("[eclipse] missions run errors:", summary);
+        }
+      } catch (err) {
+        console.warn("[eclipse] missions alarm run failed:", err);
+      }
+      // PR #5 §2c fix (W2): reschedule at the end of every
+      // missions run, so a watch created in the workspace gets
+      // an alarm within 15 minutes even without a restart.
+      await scheduleWatchAlarms();
+    })();
+    return;
+  }
   if (!alarm.name.startsWith("eclipse-watch-")) return;
   (async () => {
     try {
       // B4/M16: a failed run is logged, not silently dropped.
+      // W3: remember due watch URLs so a firing can name its
+      // page in the notification (checkDueWatches only returns
+      // counts, not the fired watch's URL).
+      const dueUrls = new Map<string, string>();
       const summary = await checkDueWatches({
         fetchDue: async () => {
           const data = (await serverCall("/monitor/due")) as { watches: Watch[] };
+          for (const w of data.watches) dueUrls.set(w.id, w.url);
           return data.watches;
         },
         findTab: async (url) => {
@@ -166,6 +371,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
             method: "POST",
             body: JSON.stringify(obs),
           })) as { fired: boolean; broken: boolean; status: string; reason: string };
+          if (verdict.fired) {
+            // Watches used to fire silently into the DB — now
+            // the user hears about it (Chrome must be running;
+            // the firing is also in the DB + the briefing).
+            void notifyWatchFired(dueUrls.get(watchId) ?? watchId);
+          }
           return verdict;
         },
       });
@@ -192,6 +403,61 @@ async function ensureOffscreen(): Promise<void> {
     reasons: [chrome.offscreen.Reason.USER_MEDIA],
     justification: "On-device vision (YOLO, OCR, BlazeFace, Florence-2) via WebGPU.",
   });
+}
+
+/** Observe a tab: walk the DOM, capture the screenshot, run
+ * the offscreen observe + redact + gate. Extracted from the
+ * eclipse.observe listener (PR #5, W2) so the missions driver
+ * can call it directly — a service worker cannot reliably
+ * message its own listeners, so the driver does not send
+ * eclipse.observe to itself. The listener below still calls
+ * this function; behaviour is unchanged. */
+async function observeTab(
+  tabId: number,
+  taskKind?: string,
+  egressTarget?: string,
+): Promise<unknown> {
+  // captureVisibleTab screenshots the ACTIVE tab: if the target
+  // tab is not active, the screenshot would show a different
+  // page than the walk — the vision results (YOLO boxes, OCR,
+  // faces, blackout boxes) would describe the wrong page.
+  // Activate the target first so the walk and the screenshot
+  // agree. A closed tab makes tabs.get reject → the caller sees
+  // the error.
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.active) {
+    await chrome.tabs.update(tabId, { active: true });
+  }
+  const walk = await chrome.tabs.sendMessage(tabId, { type: "walk" });
+  const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
+  // Decode the screenshot to raw pixels for the offscreen doc.
+  const img = await fetch(dataUrl).then((r) => r.blob());
+  const bitmap = await createImageBitmap(img);
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.drawImage(bitmap, 0, 0);
+  const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  await ensureOffscreen();
+  // An unknown taskKind would reach the gate as neither
+  // "image" nor "mixed", so vision would silently stop being
+  // required — default to "mixed" (the strictest) instead.
+  const kind =
+    taskKind === "dom" || taskKind === "image" || taskKind === "mixed"
+      ? taskKind
+      : "mixed";
+  const result = await chrome.runtime.sendMessage({
+    type: "observe",
+    url: walk.url,
+    viewport: walk.viewport,
+    elements: walk.elements,
+    screenshot: { data: pixels.data, width: bitmap.width, height: bitmap.height },
+    taskKind: kind,
+    egressTarget: egressTarget ?? "http://127.0.0.1:8000",
+  });
+  if (result?.blackoutBoxes?.length) {
+    await chrome.tabs.sendMessage(tabId, { type: "blackout", boxes: result.blackoutBoxes });
+  }
+  return result;
 }
 
 chrome.runtime.onMessage.addListener(
@@ -252,46 +518,7 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ error: "no active tab" });
         return;
       }
-      // captureVisibleTab screenshots the ACTIVE tab: if the target
-      // tab is not active, the screenshot would show a different
-      // page than the walk — the vision results (YOLO boxes, OCR,
-      // faces, blackout boxes) would describe the wrong page.
-      // Activate the target first so the walk and the screenshot
-      // agree. A closed tab makes tabs.get reject → error response.
-      const tab = await chrome.tabs.get(tabId);
-      if (!tab.active) {
-        await chrome.tabs.update(tabId, { active: true });
-      }
-      const walk = await chrome.tabs.sendMessage(tabId, { type: "walk" });
-      const dataUrl = await chrome.tabs.captureVisibleTab({ format: "png" });
-      // Decode the screenshot to raw pixels for the offscreen doc.
-      const img = await fetch(dataUrl).then((r) => r.blob());
-      const bitmap = await createImageBitmap(img);
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(bitmap, 0, 0);
-      const pixels = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-      await ensureOffscreen();
-      // An unknown taskKind would reach the gate as neither
-      // "image" nor "mixed", so vision would silently stop being
-      // required — default to "mixed" (the strictest) instead.
-      const taskKind =
-        msg.taskKind === "dom" || msg.taskKind === "image" || msg.taskKind === "mixed"
-          ? msg.taskKind
-          : "mixed";
-      const result = await chrome.runtime.sendMessage({
-        type: "observe",
-        url: walk.url,
-        viewport: walk.viewport,
-        elements: walk.elements,
-        screenshot: { data: pixels.data, width: bitmap.width, height: bitmap.height },
-        taskKind,
-        egressTarget: msg.egressTarget ?? "http://127.0.0.1:8000",
-      });
-      if (result?.blackoutBoxes?.length) {
-        await chrome.tabs.sendMessage(tabId, { type: "blackout", boxes: result.blackoutBoxes });
-      }
-      sendResponse(result);
+      sendResponse(await observeTab(tabId, msg.taskKind, msg.egressTarget));
     } catch (err) {
       sendResponse({ error: err instanceof Error ? err.message : String(err) });
     }
