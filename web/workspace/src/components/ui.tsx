@@ -75,18 +75,22 @@ export function statusTone(status: string): ChipTone {
     case "bounced":
     case "needs_reconnect":
     case "unavailable":
+    case "stalled":
       return "bad";
     case "ask_user":
     case "paused":
     case "muted":
     case "draft":
     case "handoff":
+    case "waiting_for_extension":
       return "warn";
     case "running":
     case "planned":
     case "executing":
     case "pending":
       return "info";
+    case "stopped":
+      return "plain";
     default:
       return "plain";
   }
