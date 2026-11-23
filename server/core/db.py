@@ -73,6 +73,31 @@ CREATE TABLE IF NOT EXISTS connectors(
 CREATE TABLE IF NOT EXISTS calendar_events(
   id TEXT PRIMARY KEY, task_id TEXT, event_id TEXT, summary TEXT,
   start TEXT, end TEXT, location TEXT, created_at INTEGER);
+-- PR #5: missions — one row per standing mission. Timestamps are
+-- integer SECONDS (never ms; the audit log is the only ms table).
+CREATE TABLE IF NOT EXISTS missions(
+  id TEXT PRIMARY KEY, type TEXT NOT NULL, name TEXT NOT NULL,
+  status TEXT NOT NULL, config_json TEXT NOT NULL,
+  bounds_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, last_run_at INTEGER,
+  next_run_at INTEGER, last_run_status TEXT, last_error TEXT);
+CREATE INDEX IF NOT EXISTS idx_missions_status_next
+  ON missions(status, next_run_at);
+-- PR #5: mission runs — one row per tick that started work.
+CREATE TABLE IF NOT EXISTS mission_runs(
+  id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, task_id TEXT,
+  status TEXT NOT NULL, started_at INTEGER NOT NULL,
+  ended_at INTEGER, detail TEXT);
+CREATE INDEX IF NOT EXISTS idx_mission_runs_mission
+  ON mission_runs(mission_id, started_at DESC);
+-- PR #5: mission activity — the append-only receipt log.
+CREATE TABLE IF NOT EXISTS mission_activity(
+  id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, run_id TEXT,
+  kind TEXT NOT NULL, detail TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_mission_activity_mission
+  ON mission_activity(mission_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mission_activity_kind_day
+  ON mission_activity(mission_id, kind, created_at);
 """
 
 # Verified free top 5 (Sprint 0 probe, 2026-11-21). gpt-oss-120b is
@@ -279,6 +304,62 @@ def migrate(db_path: Path | None = None) -> None:
             ):
                 if col not in watch_cols:
                     conn.execute(ddl)
+            # PR #5: missions, mission_runs, mission_activity
+            # tables + the tasks.mission_id link (one mission =
+            # one task per run; the runner sets the link right
+            # after create_task). The SCHEMA string declares the
+            # tables for fresh databases; existing ones get them
+            # here, and the ALTER is guarded by PRAGMA
+            # table_info, the db.py pattern.
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if "missions" not in tables:
+                conn.execute(
+                    "CREATE TABLE missions("
+                    " id TEXT PRIMARY KEY, type TEXT NOT NULL,"
+                    " name TEXT NOT NULL, status TEXT NOT NULL,"
+                    " config_json TEXT NOT NULL,"
+                    " bounds_json TEXT NOT NULL,"
+                    " created_at INTEGER NOT NULL,"
+                    " updated_at INTEGER NOT NULL, last_run_at INTEGER,"
+                    " next_run_at INTEGER, last_run_status TEXT,"
+                    " last_error TEXT)"
+                )
+            if "mission_runs" not in tables:
+                conn.execute(
+                    "CREATE TABLE mission_runs("
+                    " id TEXT PRIMARY KEY, mission_id TEXT NOT NULL,"
+                    " task_id TEXT, status TEXT NOT NULL,"
+                    " started_at INTEGER NOT NULL, ended_at INTEGER,"
+                    " detail TEXT)"
+                )
+            if "mission_activity" not in tables:
+                conn.execute(
+                    "CREATE TABLE mission_activity("
+                    " id TEXT PRIMARY KEY, mission_id TEXT NOT NULL,"
+                    " run_id TEXT, kind TEXT NOT NULL,"
+                    " detail TEXT NOT NULL, created_at INTEGER NOT NULL)"
+                )
+            task_cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(tasks)")}
+            if "mission_id" not in task_cols:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN mission_id TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_mission"
+                " ON tasks(mission_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_missions_status_next"
+                " ON missions(status, next_run_at)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mission_runs_mission"
+                " ON mission_runs(mission_id, started_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mission_activity_mission"
+                " ON mission_activity(mission_id, created_at DESC)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mission_activity_kind_day"
+                " ON mission_activity(mission_id, kind, created_at)")
             reset_at = _next_midnight_utc_epoch()
             for model in FREE_MODELS:
                 conn.execute(
@@ -294,6 +375,14 @@ def migrate(db_path: Path | None = None) -> None:
                 " WHERE reset_at <= ?",
                 (reset_at, now),
             )
+            # PR #5 fact store at scale: fact_hash + scope columns,
+            # dedup backfill, and the FTS5 index over facts. The
+            # migration lives in server/memory (W5) and is
+            # idempotent; the import is function-level so db.py
+            # stays importable without the memory package.
+            from ..memory import facts_migrate
+
+            facts_migrate.apply_facts_migrations(conn)
             conn.commit()
         finally:
             conn.close()
