@@ -8,14 +8,85 @@ import {
   type FreebusyResult,
   type GmailOffer,
 } from "../api";
-import { displayValue, fmtDateTime, usePoll, useTaskList } from "../hooks";
+import { displayValue, usePoll, useRelativeNow, useTaskList } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader, StatusChip, statusTone } from "../components/ui";
+import {
+  Disclosure,
+  EmptyState,
+  ErrorBanner,
+  HumanError,
+  RawData,
+  RelativeTime,
+  SectionHeader,
+  Spinner,
+  StatusChip,
+  humanStatus,
+  statusTone,
+} from "../components/ui";
+import "./ConnectorsView.css";
 
 /** Turn a datetime-local value into an RFC3339 timestamp with
  * a timezone offset (the server requires one). */
 function toRfc3339(local: string): string {
   return new Date(local).toISOString();
+}
+
+/** A future unix-seconds timestamp as "in 8 min" / "in 2 hr".
+ * fmtRelative is past-facing ("2 min ago") and clamps future
+ * timestamps to "just now", so approvals need their own
+ * formatter. Past timestamps read "expired". */
+function fmtIn(ts: number, nowMs: number): string {
+  const diffS = Math.floor(ts - nowMs / 1000);
+  if (diffS <= 0) return "expired";
+  if (diffS < 90) return "in under a minute";
+  const mins = Math.floor(diffS / 60);
+  if (mins < 60) return mins === 1 ? "in 1 min" : `in ${mins} min`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours === 1 ? "in 1 hr" : `in ${hours} hr`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "in 1 day" : `in ${days} days`;
+}
+
+/** One plain-words line for a connector's state. */
+function stateLine(row: ConnectorRow, live?: ConnectorLiveStatus): string {
+  if (!row.enabled) return "Off — Eclipse won't use it until it's turned back on.";
+  const state = live?.state ?? row.state;
+  switch (state) {
+    case "connected":
+      return "Connected and ready.";
+    case "needs_reconnect":
+      return "The Google grant expired or was revoked.";
+    case "unavailable":
+      return "Unavailable right now — the check couldn't reach it.";
+    case null:
+    case undefined:
+      return "Status unknown — check the live status.";
+    default:
+      return `Status: ${state.replaceAll("_", " ")}.`;
+  }
+}
+
+/** One offer mail: subject, sender and date, redacted body
+ * clamped to three lines with a way back to the full text. */
+function OfferRow({ offer }: { offer: GmailOffer }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = offer.body_redacted.length > 220;
+  return (
+    <li className="offer-row">
+      <p className="offer-subject">{offer.subject}</p>
+      <p className="muted offer-meta">
+        From {offer.from} · {offer.date}
+      </p>
+      <p className={expanded || !long ? "offer-body" : "offer-body offer-clamp"}>
+        {offer.body_redacted}
+      </p>
+      {long && (
+        <button type="button" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show full mail"}
+        </button>
+      )}
+    </li>
+  );
 }
 
 /** Connectors view: Gmail, Calendar, Drive — on/off, live
@@ -32,6 +103,7 @@ export function ConnectorsView({ token }: { token: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [disableName, setDisableName] = useState<string | null>(null);
+  const now = useRelativeNow();
 
   const [offers, setOffers] = useState<GmailOffer[] | null>(null);
   const [offersError, setOffersError] = useState<string | null>(null);
@@ -257,43 +329,61 @@ export function ConnectorsView({ token }: { token: string | null }) {
 
       <section aria-label="Connector status" className="pane">
         <SectionHeader title="Status" />
-        {loading && <p className="muted">Loading connectors…</p>}
+        {loading && <Spinner label="Loading connectors" />}
         {!loading && rows.length === 0 && (
           <EmptyState>
             No connectors are registered yet. The server registers Gmail,
             Calendar and Drive on first run.
           </EmptyState>
         )}
-        <ul className="plain-list">
+        <ul className="connector-grid">
           {rows.map((row) => {
             const status = live[row.name];
+            const state = status?.state ?? row.state;
             return (
-              <li key={row.name}>
-                <div className="connector-head">
-                  <strong>{row.name}</strong>{" "}
-                  <StatusChip tone={row.enabled ? "ok" : "plain"}>
-                    {row.enabled ? "on" : "off"}
-                  </StatusChip>{" "}
-                  {row.state && (
-                    <StatusChip tone={statusTone(row.state)}>{row.state}</StatusChip>
-                  )}
+              <li key={row.name} className="connector-card">
+                <div className="connector-card-head">
+                  <h3>{row.name}</h3>
+                  <span className="connector-chips">
+                    <StatusChip tone={row.enabled ? "ok" : "plain"}>
+                      {row.enabled ? "On" : "Off"}
+                    </StatusChip>
+                    {state && (
+                      <StatusChip tone={statusTone(state)}>
+                        {humanStatus(state)}
+                      </StatusChip>
+                    )}
+                  </span>
                 </div>
-                {row.last_checked && (
-                  <p className="muted">
-                    Last checked {fmtDateTime(row.last_checked)}
-                  </p>
+                <p className="connector-state">{stateLine(row, status)}</p>
+                <p className="muted connector-checked">
+                  {row.last_checked ? (
+                    <>
+                      Checked <RelativeTime ts={row.last_checked} />
+                    </>
+                  ) : (
+                    "Not checked yet"
+                  )}
+                </p>
+                {row.last_error && (
+                  <HumanError
+                    title="The last check failed"
+                    detail={row.last_error}
+                    onRetry={() => void checkLive(row.name)}
+                  />
                 )}
-                {row.last_error && <p className="danger">{row.last_error}</p>}
                 {status?.state === "needs_reconnect" && status.connect_url && (
-                  <p role="alert" className="warning">
+                  <p role="alert" className="warning connector-reconnect">
                     The Google grant expired or was revoked.{" "}
                     <a href={status.connect_url} target="_blank" rel="noreferrer">
                       Reconnect
                     </a>
                   </p>
                 )}
-                {status?.error && <p className="danger">{status.error}</p>}
-                <div className="task-actions">
+                {status?.error && (
+                  <HumanError title="The live check failed" detail={status.error} />
+                )}
+                <div className="task-actions connector-actions">
                   <button
                     type="button"
                     onClick={() => void checkLive(row.name)}
@@ -319,6 +409,7 @@ export function ConnectorsView({ token }: { token: string | null }) {
                     </button>
                   )}
                 </div>
+                <RawData label="Details" data={row} />
               </li>
             );
           })}
@@ -345,24 +436,20 @@ export function ConnectorsView({ token }: { token: string | null }) {
           </p>
           {!gmailOn && <p className="muted">Turn Gmail on to scan the inbox.</p>}
           {offersError && (
-            <p role="alert" className="danger">
-              {offersError}
-            </p>
+            <HumanError
+              title="The inbox scan failed"
+              detail={offersError}
+              onRetry={() => void loadOffers()}
+            />
           )}
           {offers === null ? (
             <EmptyState>No scan yet.</EmptyState>
           ) : offers.length === 0 ? (
             <EmptyState>No offer or interview mails found.</EmptyState>
           ) : (
-            <ul className="plain-list">
+            <ul className="plain-list offer-list">
               {offers.map((o) => (
-                <li key={o.id}>
-                  <strong>{o.subject}</strong>
-                  <p className="muted">
-                    From {o.from} · {o.date}
-                  </p>
-                  <p>{o.body_redacted}</p>
-                </li>
+                <OfferRow key={o.id} offer={o} />
               ))}
             </ul>
           )}
@@ -398,7 +485,7 @@ export function ConnectorsView({ token }: { token: string | null }) {
             </button>
           </form>
           {freebusy && (
-            <div>
+            <div className="freebusy-result">
               <p role="status" className={freebusy.free ? "success" : "warning"}>
                 {freebusy.free
                   ? "Free — nothing on the calendar in that window."
@@ -407,7 +494,7 @@ export function ConnectorsView({ token }: { token: string | null }) {
               {freebusy.busy.length > 0 && (
                 <ul className="plain-list">
                   {freebusy.busy.map((slot, i) => (
-                    <li key={i} className="mono">
+                    <li key={i} className="mono freebusy-slot">
                       {slot.start} → {slot.end}
                     </li>
                   ))}
@@ -517,7 +604,7 @@ export function ConnectorsView({ token }: { token: string | null }) {
                 <p>
                   “{eventSummary}” from {displayValue(toRfc3339(eventStart))}.
                   The approval expires{" "}
-                  {eventApprovalExpires ? fmtDateTime(eventApprovalExpires) : "in 10 minutes"}.
+                  {eventApprovalExpires ? fmtIn(eventApprovalExpires, now) : "in 10 minutes"}.
                   Creating the same event twice never duplicates it.
                 </p>
                 <div className="task-actions">
@@ -662,6 +749,15 @@ export function ConnectorsView({ token }: { token: string | null }) {
           )}
         </section>
       </div>
+
+      <Disclosure summary="How approvals work">
+        <p className="muted">
+          Creating an event or uploading a file takes two steps: first
+          approve the exact action, then run it. The approval is
+          single-use and names the task, the summary or the path — nothing
+          else. A failed run leaves the approval usable for a retry.
+        </p>
+      </Disclosure>
 
       <ConfirmDialog
         open={disableName !== null}

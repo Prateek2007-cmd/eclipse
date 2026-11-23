@@ -2,7 +2,80 @@ import { useState } from "react";
 import { api, type Fact, type RagChunk, type RagStatus } from "../api";
 import { usePoll } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
+import {
+  EmptyState,
+  ErrorBanner,
+  SectionHeader,
+  ShowMore,
+  Spinner,
+  SummaryChips,
+} from "../components/ui";
+import "./MemoryView.css";
+
+/** Rows shown before "Show more" — the APIs cap at 10, so
+ * five is half a page of results. */
+const PAGE = 5;
+
+/** One recalled fact: text clamped to two lines with a way
+ * back to the full text, topic/source/score as quiet chips.
+ * Facts have no delete endpoint (see the foot note), so there
+ * is no delete action here. */
+function FactRow({ fact }: { fact: Fact }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = fact.text.length > 160;
+  return (
+    <li className="memory-row">
+      <p className={expanded || !long ? "memory-text" : "memory-text memory-clamp"}>
+        {fact.text}
+      </p>
+      <SummaryChips
+        items={[
+          ...(fact.topic ? [{ label: "Topic", value: fact.topic }] : []),
+          { label: "", value: fact.source },
+          { label: "Score", value: String(fact.score) },
+        ]}
+      />
+      {long && (
+        <button type="button" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? "Show less" : "Show full fact"}
+        </button>
+      )}
+    </li>
+  );
+}
+
+/** One RAG chunk: text clamped, kind and score as chips, the
+ * id quiet, forget behind the confirm dialog. */
+function RagRow({ chunk, onForget }: { chunk: RagChunk; onForget: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = chunk.text.length > 160;
+  return (
+    <li className="memory-row">
+      <p className={expanded || !long ? "memory-text" : "memory-text memory-clamp"}>
+        {chunk.text}
+      </p>
+      <SummaryChips
+        items={[
+          { label: "Kind", value: chunk.kind },
+          { label: "Score", value: String(chunk.score) },
+        ]}
+      />
+      <p className="muted memory-id mono" title={chunk.id}>
+        {chunk.id}
+      </p>
+      <div className="memory-row-actions">
+        {long && (
+          <button type="button" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show less" : "Show full chunk"}
+          </button>
+        )}
+        <button type="button" onClick={onForget}>
+          Forget this chunk
+        </button>
+      </div>
+    </li>
+  );
+}
 
 /** Memory & RAG view: keyword facts and the local RAG store.
  *
@@ -22,6 +95,7 @@ export function MemoryView({ token }: { token: string | null }) {
   const [factQuery, setFactQuery] = useState("");
   const [facts, setFacts] = useState<Fact[] | null>(null);
   const [searchingFacts, setSearchingFacts] = useState(false);
+  const [shownFacts, setShownFacts] = useState(PAGE);
 
   // RAG
   const [ragStatus, setRagStatus] = useState<RagStatus | null>(null);
@@ -29,6 +103,7 @@ export function MemoryView({ token }: { token: string | null }) {
   const [ragResults, setRagResults] = useState<RagChunk[] | null>(null);
   const [ragModelAvailable, setRagModelAvailable] = useState<boolean | null>(null);
   const [searchingRag, setSearchingRag] = useState(false);
+  const [shownRag, setShownRag] = useState(PAGE);
   const [chunkId, setChunkId] = useState("");
   const [chunkText, setChunkText] = useState("");
   const [chunkKind, setChunkKind] = useState("fact");
@@ -76,6 +151,7 @@ export function MemoryView({ token }: { token: string | null }) {
     try {
       const data = await api.recallFacts(factQuery.trim(), 10);
       setFacts(data.facts);
+      setShownFacts(PAGE);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -90,6 +166,7 @@ export function MemoryView({ token }: { token: string | null }) {
       const data = await api.queryRag(ragQuery.trim(), 10);
       setRagResults(data.results);
       setRagModelAvailable(data.model_available);
+      setShownRag(PAGE);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -146,7 +223,12 @@ export function MemoryView({ token }: { token: string | null }) {
       <div className="split">
         <section aria-label="Facts" className="pane">
           <SectionHeader title="Facts" />
+          <p className="muted memory-intro">
+            Short things the planner should remember, found again by
+            shared words.
+          </p>
           <form
+            className="memory-add-form"
             onSubmit={(e) => {
               e.preventDefault();
               void saveFact();
@@ -199,41 +281,56 @@ export function MemoryView({ token }: { token: string | null }) {
               {searchingFacts ? "Searching…" : "Search"}
             </button>
           </form>
-          {facts === null ? (
-            <EmptyState>No search yet.</EmptyState>
-          ) : facts.length === 0 ? (
-            <EmptyState>No facts match that query.</EmptyState>
-          ) : (
-            <ul className="plain-list">
-              {facts.map((f) => (
-                <li key={f.id}>
-                  <p>{f.text}</p>
-                  <p className="muted">
-                    score <span className="mono">{f.score}</span>
-                    {f.topic ? ` · topic ${f.topic}` : ""} · {f.source}
-                  </p>
-                </li>
-              ))}
-            </ul>
+          {searchingFacts && <Spinner label="Searching facts" />}
+          {!searchingFacts && facts === null && (
+            <EmptyState>
+              No search yet. Search for a word a fact contains — recall
+              matches on shared words.
+            </EmptyState>
+          )}
+          {!searchingFacts && facts !== null && facts.length === 0 && (
+            <EmptyState>
+              No facts match that query. Try a broader word — recall
+              matches on shared words, not meaning.
+            </EmptyState>
+          )}
+          {!searchingFacts && facts !== null && facts.length > 0 && (
+            <div className="memory-results">
+              <ul className="plain-list">
+                {facts.slice(0, shownFacts).map((f) => (
+                  <FactRow key={f.id} fact={f} />
+                ))}
+              </ul>
+              <ShowMore
+                total={facts.length}
+                shown={shownFacts}
+                onShowMore={() => setShownFacts((n) => n + PAGE)}
+                label="facts"
+              />
+            </div>
           )}
         </section>
 
         <section aria-label="RAG store" className="pane">
           <SectionHeader title="RAG store" />
+          <p className="muted memory-intro">
+            Longer passages, found again by meaning — the local embedding
+            model scores each one.
+          </p>
           {ragStatus ? (
             <dl className="kv">
               <dt>Chunks indexed</dt>
-              <dd className="mono">{ragStatus.chunks}</dd>
+              <dd className="mono num">{ragStatus.chunks}</dd>
               <dt>Model</dt>
               <dd>
                 {ragStatus.model} ({ragStatus.dimensions} dims)
                 {ragStatus.model_available ? "" : " — not available"}
               </dd>
               <dt>Relevance threshold</dt>
-              <dd className="mono">cosine ≥ {ragStatus.threshold}</dd>
+              <dd className="mono num">cosine ≥ {ragStatus.threshold}</dd>
             </dl>
           ) : (
-            <p className="muted">Loading RAG status…</p>
+            <Spinner label="Loading RAG status" />
           )}
           <h3>Query</h3>
           <p className="muted">
@@ -263,25 +360,30 @@ export function MemoryView({ token }: { token: string | null }) {
               (server/rag/models/) — queries return nothing until it is.
             </p>
           )}
-          {ragResults === null ? (
-            <EmptyState>No search yet.</EmptyState>
-          ) : ragResults.length === 0 ? (
+          {searchingRag && <Spinner label="Searching the store" />}
+          {!searchingRag && ragResults === null && (
+            <EmptyState>
+              No search yet. Ask in plain words — the store matches on
+              meaning, not keywords.
+            </EmptyState>
+          )}
+          {!searchingRag && ragResults !== null && ragResults.length === 0 && (
             <EmptyState>Nothing relevant — no chunk reached the threshold.</EmptyState>
-          ) : (
-            <ul className="plain-list">
-              {ragResults.map((c) => (
-                <li key={c.id}>
-                  <p>{c.text}</p>
-                  <p className="muted">
-                    <span className="mono">{c.id}</span> · {c.kind} · score{" "}
-                    <span className="mono">{c.score}</span>
-                  </p>
-                  <button type="button" onClick={() => setForgetId(c.id)}>
-                    Forget this chunk
-                  </button>
-                </li>
-              ))}
-            </ul>
+          )}
+          {!searchingRag && ragResults !== null && ragResults.length > 0 && (
+            <div className="memory-results">
+              <ul className="plain-list">
+                {ragResults.slice(0, shownRag).map((c) => (
+                  <RagRow key={c.id} chunk={c} onForget={() => setForgetId(c.id)} />
+                ))}
+              </ul>
+              <ShowMore
+                total={ragResults.length}
+                shown={shownRag}
+                onShowMore={() => setShownRag((n) => n + PAGE)}
+                label="chunks"
+              />
+            </div>
           )}
         </section>
       </div>
@@ -328,9 +430,12 @@ export function MemoryView({ token }: { token: string | null }) {
             rows={4}
             required
           />
-          <button type="submit" className="primary" disabled={indexing}>
-            {indexing ? "Indexing…" : "Index chunk"}
-          </button>
+          <div className="memory-index-actions">
+            <button type="submit" className="primary" disabled={indexing}>
+              {indexing ? "Indexing…" : "Index chunk"}
+            </button>
+            {indexing && <Spinner label="Indexing" />}
+          </div>
           {indexResult && (
             <p role="status" className="success">
               {indexResult}

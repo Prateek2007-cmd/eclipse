@@ -1,7 +1,21 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { api, type AuditEntry, type AuditVerifyResult, type SystemMetrics } from "../api";
 import { fmtAuditDateTime, usePoll, useTaskList } from "../hooks";
-import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
+import {
+  EmptyState,
+  ErrorBanner,
+  HumanError,
+  RelativeTime,
+  SectionHeader,
+  ShowMore,
+  Spinner,
+  StatusChip,
+} from "../components/ui";
+import "./AuditView.css";
+
+/** Rows shown before "Show more" — the API has no
+ * pagination, so the cap is client-side. */
+const PAGE = 25;
 
 /** Audit & Trace view: the hash-chained audit log, its
  * verification, the JSON export, and server metrics.
@@ -12,7 +26,9 @@ import { EmptyState, ErrorBanner, SectionHeader } from "../components/ui";
  * seconds), so entries render through fmtAuditDateTime, not
  * fmtDateTime: the seconds formatter multiplied them a second
  * time and showed every entry in year 58863. The export
- * filename below uses exported_at raw for the same reason. */
+ * filename below uses exported_at raw for the same reason.
+ * RelativeTime takes seconds, so the ms value is divided by
+ * 1000 before it is passed in. */
 export function AuditView({ token }: { token: string | null }) {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
@@ -23,6 +39,7 @@ export function AuditView({ token }: { token: string | null }) {
   const [loading, setLoading] = useState(true);
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [taskFilter, setTaskFilter] = useState("");
+  const [shown, setShown] = useState(PAGE);
   const { tasks } = useTaskList(token);
 
   const load = async () => {
@@ -82,6 +99,8 @@ export function AuditView({ token }: { token: string | null }) {
     }
   };
 
+  const newestFirst = [...audit].reverse();
+
   return (
     <div className="view audit-view">
       <div className="view-head">
@@ -98,42 +117,53 @@ export function AuditView({ token }: { token: string | null }) {
         {metrics ? (
           <dl className="kv">
             <dt>Tasks</dt>
-            <dd className="mono">{metrics.tasks}</dd>
+            <dd className="mono num">{metrics.tasks}</dd>
             <dt>Audit entries</dt>
-            <dd className="mono">{metrics.audit_entries}</dd>
+            <dd className="mono num">{metrics.audit_entries}</dd>
             <dt>Tokens (in / out)</dt>
-            <dd className="mono">
+            <dd className="mono num">
               {metrics.tokens.in} / {metrics.tokens.out}
             </dd>
           </dl>
         ) : (
-          <p className="muted">Loading server metrics…</p>
+          <Spinner label="Loading server metrics" />
         )}
         {metrics?.note && <p className="muted">{metrics.note}</p>}
       </section>
 
       <section aria-label="Hash chain" className="pane">
-        <SectionHeader
-          title="Hash chain"
-          action={
-            <div className="task-actions">
-              <button type="button" onClick={() => void verify()} disabled={verifying}>
-                {verifying ? "Verifying…" : "Verify hash chain"}
-              </button>
-              <button type="button" onClick={() => void exportLog()} disabled={exporting}>
-                {exporting ? "Exporting…" : "Export JSON"}
-              </button>
-            </div>
-          }
-        />
-        {verified && (
-          <p role="status" className={verified.ok ? "success" : "danger"}>
-            {verified.ok
-              ? `Hash chain verifies — ${verified.checked} entries checked, no tampering detected.`
-              : verified.first_bad_id !== null
-                ? `Hash chain FAILED at entry ${verified.first_bad_id} (${verified.checked} checked before it): ${verified.reason ?? "the log may have been tampered with."}`
-                : `Verification failed: ${verified.reason ?? "unknown error"}`}
+        <SectionHeader title="Hash chain" />
+        <div className="audit-actions">
+          <button type="button" onClick={() => void verify()} disabled={verifying}>
+            {verifying ? "Verifying…" : "Verify hash chain"}
+          </button>
+          <button type="button" onClick={() => void exportLog()} disabled={exporting}>
+            {exporting ? "Exporting…" : "Export JSON"}
+          </button>
+          {verifying && <Spinner label="Verifying" />}
+          {exporting && <Spinner label="Exporting" />}
+        </div>
+        {verified && verified.ok && (
+          <p role="status" className="audit-verify-ok">
+            <StatusChip tone="ok">Chain verified</StatusChip>
+            <span>
+              {verified.checked} entries checked, no tampering detected.
+            </span>
           </p>
+        )}
+        {verified && !verified.ok && verified.first_bad_id !== null && (
+          <HumanError
+            title={`Hash chain failed at entry ${verified.first_bad_id} — ${verified.checked} checked before it`}
+            detail={verified.reason ?? "The log may have been tampered with."}
+            onRetry={() => void verify()}
+          />
+        )}
+        {verified && !verified.ok && verified.first_bad_id === null && (
+          <HumanError
+            title="Verification failed"
+            detail={verified.reason ?? "Unknown error"}
+            onRetry={() => void verify()}
+          />
         )}
         <p className="muted">
           Export downloads the full log as JSON — a local backup, on
@@ -148,7 +178,10 @@ export function AuditView({ token }: { token: string | null }) {
             <select
               aria-label="Filter audit entries by task"
               value={taskFilter}
-              onChange={(e) => setTaskFilter(e.target.value)}
+              onChange={(e) => {
+                setTaskFilter(e.target.value);
+                setShown(PAGE);
+              }}
             >
               <option value="">All tasks</option>
               {tasks.map((t) => (
@@ -159,7 +192,7 @@ export function AuditView({ token }: { token: string | null }) {
             </select>
           }
         />
-        {loading && <p className="muted">Loading audit log…</p>}
+        {loading && <Spinner label="Loading audit log" />}
         {!loading && audit.length === 0 && (
           <EmptyState>
             No audit entries yet. The first consequential action — a task,
@@ -167,36 +200,55 @@ export function AuditView({ token }: { token: string | null }) {
           </EmptyState>
         )}
         {audit.length > 0 && (
-          <div className="table-scroll">
-            <table>
-              <caption>Audit entries, newest first</caption>
-              <thead>
-                <tr>
-                  <th scope="col">#</th>
-                  <th scope="col">Time</th>
-                  <th scope="col">Action</th>
-                  <th scope="col">Task</th>
-                  <th scope="col">Hash</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...audit].reverse().slice(0, 100).map((e) => (
-                  <tr key={e.id}>
-                    <td className="mono">{e.id}</td>
-                    <td className="mono">{fmtAuditDateTime(e.created_at)}</td>
-                    <td>{e.action}</td>
-                    <td className="mono">{e.task_id ?? "—"}</td>
-                    <td className="mono" title={e.hash}>
-                      {e.payload_hash.slice(0, 12)}…
-                    </td>
+          <div className="audit-log-wrap">
+            <div className="table-scroll" tabIndex={0} role="region" aria-label="Audit log">
+              <table
+                style={
+                  {
+                    "--label-2": '"Time: "',
+                    "--label-3": '"Action: "',
+                    "--label-4": '"Task: "',
+                    "--label-5": '"Hash: "',
+                  } as CSSProperties
+                }
+              >
+                <caption>Audit entries, newest first</caption>
+                <thead>
+                  <tr>
+                    <th scope="col" className="num">#</th>
+                    <th scope="col">Time</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Task</th>
+                    <th scope="col">Hash</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {newestFirst.slice(0, shown).map((e) => (
+                    <tr key={e.id}>
+                      <th scope="row" className="mono num">{e.id}</th>
+                      <td className="audit-time">
+                        <RelativeTime ts={Math.floor(e.created_at / 1000)} />
+                        <span className="muted audit-absolute">
+                          {fmtAuditDateTime(e.created_at)}
+                        </span>
+                      </td>
+                      <td>{e.action}</td>
+                      <td className="mono">{e.task_id ?? "—"}</td>
+                      <td className="mono" title={e.hash}>
+                        {e.payload_hash.slice(0, 12)}…
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <ShowMore
+              total={newestFirst.length}
+              shown={shown}
+              onShowMore={() => setShown((n) => n + PAGE)}
+              label="entries"
+            />
           </div>
-        )}
-        {audit.length > 100 && (
-          <p className="muted">Showing the newest 100 of {audit.length} — export for the full log.</p>
         )}
       </section>
     </div>

@@ -1,0 +1,240 @@
+/* Missions view (PR #6). View-specific styles only — tokens,
+ * shared components and the shell live in tokens.css /
+ * app.css. 4px grid throughout; motion is colour/border
+ * only, on the shared durations.
+ * Glass (PR #6): mission cards and the draft form nest
+ * inside glass panes, so they stay solid — one blur layer
+ * per screen region. */
+
+/* ---------- Draft card ---------- */
+
+.draft-card .draft-warnings {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* The draft as plain sentences, not JSON. */
+.draft-summary {
+  color: var(--text-secondary);
+  margin: var(--space-3) 0;
+  text-wrap: pretty;
+}
+
+.draft-config {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--space-3);
+  margin: 0;
+  min-width: 0;
+}
+
+.draft-config legend {
+  font-weight: 500;
+  padding: 0 var(--space-1);
+}
+
+.draft-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+}
+
+.draft-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.draft-field-wide {
+  grid-column: 1 / -1;
+}
+
+.draft-field label,
+.draft-field-label {
+  font-weight: 500;
+}
+
+.draft-field-help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.draft-field-help-warn {
+  color: var(--warning);
+}
+
+.draft-needed {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+.draft-field-missing input,
+.draft-field-missing select,
+.draft-field-missing textarea {
+  border-color: var(--warning);
+}
+
+.draft-checks {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.draft-roles-line {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* ---------- Mission cards ---------- */
+
+.mission-card-failed {
+  border: 1px solid var(--danger);
+}
+
+.mission-state {
+  margin-top: var(--space-2);
+}
+
+.mission-state > p {
+  margin: 0;
+}
+
+.mission-state .disclosure {
+  margin-top: var(--space-2);
+}
+
+.mission-card .summary-chips {
+  margin-top: var(--space-2);
+}
+
+.mission-meta {
+  margin: var(--space-2) 0 0;
+}
+
+.mission-card .warning {
+  margin: var(--space-2) 0 0;
+}
+
+.mission-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mission-detail .summary-chips {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.mission-approval-meta {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+}
+
+.activity-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-list .activity-line + .activity-line {
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Resume ---------- */
+
+.resume-summary {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  /* Was a <p>: keep its default vertical margins now that
+   * it is a <div> (bug #8 — the div holds a HumanError when
+   * the resume check fails). */
+  margin: var(--space-4) 0;
+}
+
+/* The meta-error box spans the summary row, not just its
+ * content width. */
+.resume-summary .human-error {
+  width: 100%;
+}
+
+/* The job-profile line, also a <div> now for the same
+ * reason — same vertical margins as the <p> it was. */
+.profile-line {
+  margin: var(--space-4) 0;
+}
+
+.resume-forms {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  align-items: start;
+  margin-top: var(--space-3);
+}
+
+/* File picker: a styled label over a visually hidden native
+ * input. The browser's default file control breaks the
+ * design language; the input stays in the tab order (never
+ * display: none) and the focus ring shows on the label. */
+.file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.file-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-hover);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-card);
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.file-picker:hover {
+  border-color: var(--text-muted);
+}
+
+.file-input-hidden:focus-visible + .file-picker {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.file-picker-button {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-btn);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.file-picker-name {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 800px) {
+  .draft-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .resume-forms {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,10 +1,37 @@
 import { useState } from "react";
+import "./WatchesView.css";
 import { api, isHttpError, type Briefing, type Watch, type WatchEvent } from "../api";
-import { fmtDateTime, fmtTime, usePoll } from "../hooks";
+import { usePoll } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader, StatusChip, statusTone } from "../components/ui";
+import {
+  ActivityLine,
+  Disclosure,
+  EmptyState,
+  ErrorBanner,
+  RelativeTime,
+  SectionHeader,
+  ShowMore,
+  Spinner,
+  StatusChip,
+  SummaryChips,
+  statusTone,
+} from "../components/ui";
 
 const CONDITIONS = ["changed", "appeared", "disappeared", "contains", "not_contains"];
+
+/** Human labels for the server's condition names. Values sent
+ * to the server never change — only what the select and the
+ * chips show. */
+const CONDITION_LABELS: Record<string, string> = {
+  changed: "changes",
+  appeared: "appears",
+  disappeared: "disappears",
+  contains: "contains",
+  not_contains: "does not contain",
+};
+
+/** How many events show before "Show more". */
+const EVENTS_PAGE_SIZE = 8;
 
 /** Watches + briefing (plan §8). Watches only run while
  * Chrome is open — the extension checks pages in open tabs on
@@ -14,6 +41,7 @@ const CONDITIONS = ["changed", "appeared", "disappeared", "contains", "not_conta
 export function WatchesView({ token }: { token: string | null }) {
   const [watches, setWatches] = useState<Watch[]>([]);
   const [events, setEvents] = useState<WatchEvent[]>([]);
+  const [eventsShown, setEventsShown] = useState(EVENTS_PAGE_SIZE);
   const [due, setDue] = useState<Watch[]>([]);
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,23 +202,31 @@ export function WatchesView({ token }: { token: string | null }) {
             void createWatch();
           }}
         >
-          <label htmlFor="watch-url">Page URL</label>
-          <input
-            id="watch-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://…"
-            required
-          />
-          <label htmlFor="watch-selector">CSS selector for the element to follow</label>
-          <input
-            id="watch-selector"
-            value={selector}
-            onChange={(e) => setSelector(e.target.value)}
-            placeholder="e.g. #results .price"
-            required
-          />
+          <div>
+            <label htmlFor="watch-url">Page URL</label>
+            <input
+              id="watch-url"
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="watch-selector">CSS selector for the element to follow</label>
+            <input
+              id="watch-selector"
+              value={selector}
+              onChange={(e) => setSelector(e.target.value)}
+              placeholder="e.g. #results .price"
+              required
+            />
+            <p className="field-help">
+              The element to follow, as a CSS selector. In Chrome, right-click
+              the element, choose Inspect, then Copy selector.
+            </p>
+          </div>
           <div className="form-grid">
             <div>
               <label htmlFor="watch-condition">Fire when the element…</label>
@@ -201,7 +237,7 @@ export function WatchesView({ token }: { token: string | null }) {
               >
                 {CONDITIONS.map((c) => (
                   <option key={c} value={c}>
-                    {c}
+                    {CONDITION_LABELS[c] ?? c}
                   </option>
                 ))}
               </select>
@@ -219,7 +255,7 @@ export function WatchesView({ token }: { token: string | null }) {
             </div>
           </div>
           <button type="submit" className="primary" disabled={creating}>
-            {creating ? "Creating…" : "Create watch"}
+            {creating ? <Spinner label="Creating" /> : "Create watch"}
           </button>
         </form>
       </section>
@@ -235,7 +271,27 @@ export function WatchesView({ token }: { token: string | null }) {
             </span>
           }
         />
-        {loading && <p className="muted">Loading watches…</p>}
+        {/* The mute length lives with the mute actions: one
+          * shared setting, directly above the rows whose Mute
+          * buttons use it. */}
+        <div className="mute-setting">
+          <label htmlFor="mute-minutes">Mute length (minutes)</label>
+          <input
+            id="mute-minutes"
+            type="number"
+            min={1}
+            max={1440}
+            value={muteMinutes}
+            onChange={(e) => setMuteMinutes(Number(e.target.value))}
+          />
+          <span className="muted">applies to every Mute button below</span>
+        </div>
+        {loading && (
+          <div className="skeleton-stack" aria-hidden="true">
+            <div className="skeleton skeleton-block" style={{ height: 96 }} />
+            <div className="skeleton skeleton-block" style={{ height: 96 }} />
+          </div>
+        )}
         {!loading && watches.length === 0 && (
           <EmptyState>
             No watches yet. Create one above — the extension checks it in an
@@ -246,22 +302,62 @@ export function WatchesView({ token }: { token: string | null }) {
           {watches.map((w) => (
             <li key={w.id} className={w.status === "broken" ? "watch-broken" : ""}>
               <div className="watch-head">
-                <a href={w.url} target="_blank" rel="noreferrer">
+                <a href={w.url} target="_blank" rel="noreferrer" className="watch-url" title={w.url}>
                   {w.url}
                 </a>
                 <StatusChip tone={statusTone(w.status)}>{w.status}</StatusChip>
               </div>
-              <div className="secondary">
-                {w.condition} · <span className="mono">{w.selector}</span> · every{" "}
-                {w.interval_min} min · {w.last_value ?? "no baseline yet"}
-              </div>
-              <div className="muted mono">
-                {w.last_checked
-                  ? `checked ${fmtTime(w.last_checked)}`
-                  : "never checked"}
-                {w.last_fired_at ? ` · fired ${fmtTime(w.last_fired_at)}` : ""}
-                {w.misses > 0 ? ` · ${w.misses} missed check${w.misses === 1 ? "" : "s"}` : ""}
-              </div>
+              <SummaryChips
+                items={[
+                  { label: "", value: CONDITION_LABELS[w.condition] ?? w.condition },
+                  { label: "", value: `every ${w.interval_min} min` },
+                  ...(w.misses > 0
+                    ? [
+                        {
+                          label: "",
+                          value: `${w.misses} missed check${w.misses === 1 ? "" : "s"}`,
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+              <p className="muted watch-meta">
+                {w.last_checked ? (
+                  <>
+                    Checked <RelativeTime ts={w.last_checked} />
+                  </>
+                ) : (
+                  "Never checked"
+                )}
+                {w.last_fired_at ? (
+                  <>
+                    {" · "}Fired <RelativeTime ts={w.last_fired_at} />
+                  </>
+                ) : (
+                  ""
+                )}
+                {w.status === "muted" && w.muted_until ? (
+                  <>
+                    {" · "}Muted until <RelativeTime ts={w.muted_until} />
+                  </>
+                ) : (
+                  ""
+                )}
+              </p>
+              <Disclosure summary="Details" className="watch-details">
+                <dl className="kv">
+                  <dt>Page</dt>
+                  <dd className="watch-detail-url">{w.url}</dd>
+                  <dt>Selector</dt>
+                  <dd className="mono">{w.selector}</dd>
+                  <dt>Last value</dt>
+                  <dd>{w.last_value ?? "No baseline yet"}</dd>
+                  <dt>Created</dt>
+                  <dd>
+                    <RelativeTime ts={w.created_at} />
+                  </dd>
+                </dl>
+              </Disclosure>
               <div className="task-actions">
                 {w.status === "muted" ? (
                   <button
@@ -390,17 +486,6 @@ export function WatchesView({ token }: { token: string | null }) {
             </li>
           ))}
         </ul>
-        <div className="mute-setting">
-          <label htmlFor="mute-minutes">Mute length (minutes)</label>
-          <input
-            id="mute-minutes"
-            type="number"
-            min={1}
-            max={1440}
-            value={muteMinutes}
-            onChange={(e) => setMuteMinutes(Number(e.target.value))}
-          />
-        </div>
       </section>
 
       <div className="split">
@@ -409,15 +494,37 @@ export function WatchesView({ token }: { token: string | null }) {
           {events.length === 0 ? (
             <EmptyState>No watch has fired yet. Firings land here.</EmptyState>
           ) : (
-            <ul className="plain-list">
-              {events.map((e) => (
-                <li key={e.id}>
-                  <StatusChip tone={e.kind === "fired" ? "warn" : "bad"}>{e.kind}</StatusChip>{" "}
-                  <span className="muted mono">{fmtDateTime(e.created_at)}</span>
-                  <p>{e.detail}</p>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="watch-events-list">
+                {events.slice(0, eventsShown).map((e) => (
+                  <li key={e.id}>
+                    <ActivityLine
+                      tone={e.kind === "fired" ? "warn" : "bad"}
+                      title={e.detail}
+                      detail={
+                        e.old_value !== null || e.new_value !== null ? (
+                          <p className="muted watch-event-values">
+                            {e.old_value !== null && (
+                              <span>Was: {e.old_value}</span>
+                            )}
+                            {e.new_value !== null && (
+                              <span>Now: {e.new_value}</span>
+                            )}
+                          </p>
+                        ) : undefined
+                      }
+                      when={e.created_at}
+                    />
+                  </li>
+                ))}
+              </ul>
+              <ShowMore
+                total={events.length}
+                shown={eventsShown}
+                onShowMore={() => setEventsShown(events.length)}
+                label="events"
+              />
+            </>
           )}
         </section>
 
@@ -425,41 +532,52 @@ export function WatchesView({ token }: { token: string | null }) {
           <SectionHeader
             title="Morning briefing"
             action={
-              <button type="button" onClick={() => void buildBriefing()} disabled={building}>
-                {building ? "Building…" : "Build briefing now"}
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void buildBriefing()}
+                disabled={building}
+              >
+                {building ? <Spinner label="Building" /> : "Build briefing now"}
               </button>
             }
           />
+          <p className="muted">
+            A briefing never sends mail — it shows, you act.
+          </p>
           {!briefing ? (
             <EmptyState>
-              No briefing built yet. A briefing never sends mail — it shows,
-              you act.
+              No briefing built yet — build one to see what the morning
+              report looks like.
             </EmptyState>
           ) : briefing.cards.length === 0 ? (
             <p className="muted">
-              Briefing from {fmtDateTime(briefing.created_at)} — nothing to
-              report.
+              Briefing from <RelativeTime ts={briefing.created_at} /> — nothing
+              to report.
             </p>
           ) : (
             <div>
-              <p className="muted">Built {fmtDateTime(briefing.created_at)}</p>
-              <ul className="briefing-list">
+              <p className="muted">
+                Built <RelativeTime ts={briefing.created_at} />
+              </p>
+              <ul className="briefing-cards">
                 {briefing.cards.map((c, i) => (
                   <li key={`${c.kind}-${i}`}>
-                    <strong>{c.title}</strong>
-                    <p>{c.body}</p>
-                    {c.action && c.action_label && (
-                      // Sprint 9 fix (review M5): offer cards carry a
-                      // Gmail id, not a URL — render those as plain text,
-                      // never an <a> with no href.
-                      c.action.startsWith("http") ? (
-                        <a href={c.action} target="_blank" rel="noreferrer">
-                          {c.action_label}
-                        </a>
-                      ) : (
-                        <span className="muted">{c.action_label}</span>
-                      )
-                    )}
+                    <Disclosure summary={c.title}>
+                      <p>{c.body}</p>
+                      {c.action && c.action_label && (
+                        // Sprint 9 fix (review M5): offer cards carry a
+                        // Gmail id, not a URL — render those as plain text,
+                        // never an <a> with no href.
+                        c.action.startsWith("http") ? (
+                          <a href={c.action} target="_blank" rel="noreferrer">
+                            {c.action_label}
+                          </a>
+                        ) : (
+                          <span className="muted">{c.action_label}</span>
+                        )
+                      )}
+                    </Disclosure>
                   </li>
                 ))}
               </ul>

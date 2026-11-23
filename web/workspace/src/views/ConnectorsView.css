@@ -1,0 +1,131 @@
+/* Connectors view: summary-first cards, quiet actions, errors
+ * as one plain line with the technical text behind Details.
+ * 4px grid throughout; tokens only, no hardcoded colours.
+ * Glass (PR #6): connector cards nest inside glass panes, so
+ * they stay solid — one blur layer per screen region. */
+
+.connector-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+.connector-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  box-shadow: var(--shadow-card);
+}
+
+.connector-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.connector-card-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.connector-chips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.connector-state {
+  margin: 0;
+}
+
+.connector-checked {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.connector-card .human-error {
+  margin-top: var(--space-1);
+}
+
+.connector-reconnect {
+  margin: var(--space-1) 0 0;
+}
+
+.connector-actions {
+  margin-top: auto;
+  padding-top: var(--space-2);
+}
+
+/* The Details expand sits at the foot of the card, quiet. */
+.connector-card .raw-data {
+  border: none;
+  background: transparent;
+}
+
+.connector-card .raw-data > summary {
+  padding: var(--space-1) 0 0;
+  font-weight: 400;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.connector-card .raw-data .disclosure-body {
+  padding: 0 0 0 22px;
+}
+
+/* Gmail offers: subject first, meta quiet, body clamped to
+ * three lines until the reader asks for the rest. */
+.offer-list li {
+  padding: var(--space-3);
+}
+
+.offer-subject {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.offer-meta {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+}
+
+.offer-body {
+  margin: var(--space-2) 0 0;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.offer-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.offer-row button {
+  margin-top: var(--space-2);
+}
+
+/* Free/busy result sits below the form with breathing room. */
+.freebusy-result {
+  margin-top: var(--space-3);
+}
+
+.freebusy-result > p {
+  margin: 0 0 var(--space-2) 0;
+}
+
+.freebusy-slot {
+  font-size: var(--text-sm);
+}

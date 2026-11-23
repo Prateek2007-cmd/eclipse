@@ -1,8 +1,35 @@
 import { useState } from "react";
+import "./MailView.css";
 import { api, type Draft, type MailLogEntry, type RoleInput } from "../api";
-import { fmtDateTime, newApprovalId, usePoll, useTaskList } from "../hooks";
+import { newApprovalId, usePoll, useTaskList } from "../hooks";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { EmptyState, ErrorBanner, SectionHeader, StatusChip, statusTone } from "../components/ui";
+import {
+  ActivityLine,
+  ApprovalBanner,
+  EmptyState,
+  ErrorBanner,
+  HumanError,
+  RelativeTime,
+  SectionHeader,
+  ShowMore,
+  StatusChip,
+  humanStatus,
+  statusTone,
+} from "../components/ui";
+
+/** How many drafts / log entries show before "Show more". */
+const DRAFTS_PAGE_SIZE = 8;
+const LOG_PAGE_SIZE = 8;
+
+/** An approve/send/edit failure, shown in the draft detail
+ * pane as a HumanError with a retry that re-opens the
+ * confirm dialog (approve/send) or re-runs the save (edit).
+ * Load/create/bounce failures stay in the top ErrorBanner. */
+type DetailError = {
+  title: string;
+  detail: string;
+  retry: "approve" | "send" | "edit";
+};
 
 /** Mail view: drafts, the approve → send flow, the send log,
  * and bounce checks.
@@ -19,8 +46,11 @@ export function MailView({ token }: { token: string | null }) {
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draftsShown, setDraftsShown] = useState(DRAFTS_PAGE_SIZE);
+  const [logShown, setLogShown] = useState(LOG_PAGE_SIZE);
   const [editBody, setEditBody] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<DetailError | null>(null);
   const [sendResult, setSendResult] = useState<string | null>(null);
   const [attachResume, setAttachResume] = useState(false);
   const [confirmSend, setConfirmSend] = useState(false);
@@ -104,12 +134,16 @@ export function MailView({ token }: { token: string | null }) {
     if (!selected) return;
     setConfirmApprove(false);
     setPending("approve");
-    setError(null);
+    setDetailError(null);
     try {
       await api.approveDraft(selected.id, newApprovalId());
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setDetailError({
+        title: "Couldn't approve this draft",
+        detail: err instanceof Error ? err.message : String(err),
+        retry: "approve",
+      });
     } finally {
       setPending(null);
     }
@@ -118,13 +152,17 @@ export function MailView({ token }: { token: string | null }) {
   const saveEdit = async () => {
     if (!selected || editBody === null) return;
     setPending("edit");
-    setError(null);
+    setDetailError(null);
     try {
       await api.editDraft(selected.id, editBody);
       setEditBody(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setDetailError({
+        title: "Couldn't save the edit",
+        detail: err instanceof Error ? err.message : String(err),
+        retry: "edit",
+      });
     } finally {
       setPending(null);
     }
@@ -134,7 +172,7 @@ export function MailView({ token }: { token: string | null }) {
     if (!selected) return;
     setConfirmSend(false);
     setPending("send");
-    setError(null);
+    setDetailError(null);
     setSendResult(null);
     try {
       const result = await api.sendDraft(selected.id, attachResume);
@@ -143,10 +181,21 @@ export function MailView({ token }: { token: string | null }) {
       );
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setDetailError({
+        title: "Couldn't send this mail",
+        detail: err instanceof Error ? err.message : String(err),
+        retry: "send",
+      });
     } finally {
       setPending(null);
     }
+  };
+
+  const retryDetailError = () => {
+    if (!detailError) return;
+    if (detailError.retry === "approve") setConfirmApprove(true);
+    else if (detailError.retry === "send") setConfirmSend(true);
+    else void saveEdit();
   };
 
   const bounceCheck = async () => {
@@ -191,7 +240,10 @@ export function MailView({ token }: { token: string | null }) {
               <select
                 aria-label="Filter drafts by status"
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setDraftsShown(DRAFTS_PAGE_SIZE);
+                }}
               >
                 <option value="">All statuses</option>
                 <option value="draft">Draft</option>
@@ -201,15 +253,20 @@ export function MailView({ token }: { token: string | null }) {
               </select>
             }
           />
-          {loading && <p className="muted">Loading drafts…</p>}
+          {loading && (
+            <div className="skeleton-stack" aria-hidden="true">
+              <div className="skeleton skeleton-block" style={{ height: 64 }} />
+              <div className="skeleton skeleton-block" style={{ height: 64 }} />
+            </div>
+          )}
           {!loading && drafts.length === 0 && (
             <EmptyState>
               No drafts yet. Create one below — one per recruiter, from a
               role on the shortlist.
             </EmptyState>
           )}
-          <ul className="task-list">
-            {drafts.map((d) => (
+          <ul className="task-list draft-list">
+            {drafts.slice(0, draftsShown).map((d) => (
               <li key={d.id}>
                 <button
                   type="button"
@@ -217,37 +274,56 @@ export function MailView({ token }: { token: string | null }) {
                   onClick={() => {
                     setSelectedId(d.id);
                     setEditBody(null);
+                    setDetailError(null);
                     setSendResult(null);
                   }}
                   aria-current={d.id === selectedId ? true : undefined}
                 >
-                  <span>
-                    {d.recipient}
-                    <br />
-                    <span className="muted">{d.subject}</span>
+                  <span className="draft-row-main">
+                    <span className="draft-recipient">{d.recipient}</span>
+                    <span className="muted draft-subject">{d.subject}</span>
+                    <span className="muted draft-meta">
+                      <RelativeTime ts={d.created_at} />
+                      {d.id === selectedId ? (
+                        <span className="selected-mark"> · Selected</span>
+                      ) : null}
+                    </span>
                   </span>
-                  <StatusChip tone={statusTone(d.status)}>{d.status}</StatusChip>
+                  <StatusChip tone={statusTone(d.status)}>{humanStatus(d.status)}</StatusChip>
                 </button>
               </li>
             ))}
           </ul>
+          <ShowMore
+            total={drafts.length}
+            shown={draftsShown}
+            onShowMore={() => setDraftsShown(drafts.length)}
+            label="drafts"
+          />
         </section>
 
         <section aria-label="Draft detail" className="pane">
           {!selected ? (
             <EmptyState>Pick a draft to read it, edit it, approve it, and send it.</EmptyState>
           ) : (
-            <div>
+            <div className="draft-detail">
               <SectionHeader
                 title={selected.subject}
-                action={<StatusChip tone={statusTone(selected.status)}>{selected.status}</StatusChip>}
+                action={<StatusChip tone={statusTone(selected.status)}>{humanStatus(selected.status)}</StatusChip>}
               />
-              <p className="muted">
+              <p className="muted draft-meta-line">
                 To {selected.recipient} · role {selected.role_id} · created{" "}
-                {fmtDateTime(selected.created_at)}
+                <RelativeTime ts={selected.created_at} />
               </p>
+              {detailError && (
+                <HumanError
+                  title={detailError.title}
+                  detail={detailError.detail}
+                  onRetry={retryDetailError}
+                />
+              )}
               {editBody === null ? (
-                <pre className="draft-body">{selected.body}</pre>
+                <div className="mail-body-pane">{selected.body}</div>
               ) : (
                 <div>
                   <label htmlFor="draft-edit">Edit the draft body</label>
@@ -257,6 +333,9 @@ export function MailView({ token }: { token: string | null }) {
                     onChange={(e) => setEditBody(e.target.value)}
                     rows={10}
                   />
+                  <p className="muted">
+                    Editing clears approval — approve again before sending.
+                  </p>
                   <div className="task-actions">
                     <button
                       type="button"
@@ -277,12 +356,18 @@ export function MailView({ token }: { token: string | null }) {
                   {sendResult}
                 </p>
               )}
-              <div className="task-actions">
-                {selected.status === "draft" && (
-                  <>
+              {selected.status === "draft" && (
+                <>
+                  <ApprovalBanner
+                    count={1}
+                    text="This draft needs your approval before it can be sent. Approve only after reading it — the approval is single-use and expires in 10 minutes."
+                  >
                     <button
                       type="button"
-                      onClick={() => setEditBody(selected.body)}
+                      onClick={() => {
+                        setEditBody(selected.body);
+                        setDetailError(null);
+                      }}
                       disabled={pending !== null}
                     >
                       Edit
@@ -295,10 +380,16 @@ export function MailView({ token }: { token: string | null }) {
                     >
                       {pending === "approve" ? "Approving…" : "Approve"}
                     </button>
-                  </>
-                )}
-                {selected.status === "approved" && (
-                  <>
+                  </ApprovalBanner>
+                  <p className="muted mail-edit-note">
+                    Editing clears approval — you will need to approve again
+                    before sending.
+                  </p>
+                </>
+              )}
+              {selected.status === "approved" && (
+                <>
+                  <div className="task-actions">
                     <label className="check-row">
                       <input
                         type="checkbox"
@@ -315,15 +406,12 @@ export function MailView({ token }: { token: string | null }) {
                     >
                       {pending === "send" ? "Sending…" : "Send"}
                     </button>
-                  </>
-                )}
-              </div>
-              {selected.status === "draft" && (
-                <p className="muted">
-                  Approve only after reading the draft. The approval is
-                  single-use: it authorises this draft's send, and only
-                  this one.
-                </p>
+                  </div>
+                  <p className="muted">
+                    Approved — this approval sends this draft once, then it
+                    is used up.
+                  </p>
+                </>
               )}
               {selected.status === "sent" && (
                 <p className="muted">
@@ -430,29 +518,31 @@ export function MailView({ token }: { token: string | null }) {
           {log.length === 0 ? (
             <EmptyState>No mails sent yet. Every send is logged here, per recruiter.</EmptyState>
           ) : (
-            <table>
-              <caption>Sent, bounced, and no-reply mails, oldest first</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Recipient</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Detail</th>
-                  <th scope="col">When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {log.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{entry.recipient}</td>
-                    <td>
-                      <StatusChip tone={statusTone(entry.status)}>{entry.status}</StatusChip>
-                    </td>
-                    <td>{entry.detail || "—"}</td>
-                    <td className="mono">{fmtDateTime(entry.created_at)}</td>
-                  </tr>
+            <>
+              <ul className="mail-log-list">
+                {log.slice(0, logShown).map((entry) => (
+                  <li key={entry.id}>
+                    <ActivityLine
+                      tone={statusTone(entry.status)}
+                      title={logTitle(entry)}
+                      detail={
+                        <p className="muted">
+                          Role {entry.role_id}
+                          {entry.detail ? ` · ${entry.detail}` : ""}
+                        </p>
+                      }
+                      when={entry.created_at}
+                    />
+                  </li>
                 ))}
-              </tbody>
-            </table>
+              </ul>
+              <ShowMore
+                total={log.length}
+                shown={logShown}
+                onShowMore={() => setLogShown(log.length)}
+                label="entries"
+              />
+            </>
           )}
         </section>
 
@@ -528,4 +618,13 @@ export function MailView({ token }: { token: string | null }) {
       </ConfirmDialog>
     </div>
   );
+}
+
+/** One send-log line in plain words: what happened, and to
+ * whom. Unknown statuses fall back to the raw status so
+ * nothing is ever hidden. */
+function logTitle(entry: MailLogEntry): string {
+  if (entry.status === "sent") return `Sent to ${entry.recipient}`;
+  if (entry.status === "bounced") return `Bounced — ${entry.recipient}`;
+  return `${entry.status} — ${entry.recipient}`;
 }
